@@ -57,6 +57,7 @@ func (p *GenericProcessor) Process(
 	result := &ProcessingResult{}
 	csvReader := csv.NewReader(file)
 	csvReader.TrimLeadingSpace = true
+	csvReader.FieldsPerRecord = -1 // prevents reader from crashing
 
 	headers, err := csvReader.Read()
 	if err != nil {
@@ -66,6 +67,18 @@ func (p *GenericProcessor) Process(
 	headerMap := make(map[string]int)
 	for i, h := range headers {
 		headerMap[strings.TrimSpace(h)] = i
+	}
+
+	numHeaders := len(headers)
+
+	mergeColumnIndex := -1
+	for _, mapping := range p.config.ColumnMappings {
+		if mapping.MergeExcessFields {
+			if idx, ok := headerMap[mapping.CSVHeader]; ok {
+				mergeColumnIndex = idx
+				break // assume only one column can be merge target
+			}
+		}
 	}
 
 	allRecords, err := csvReader.ReadAll()
@@ -86,6 +99,29 @@ func (p *GenericProcessor) Process(
 
 RecordLoop:
 	for i, record := range allRecords {
+		if len(record) > numHeaders && mergeColumnIndex != -1 {
+			numExtraFields := len(record) - numHeaders
+
+			endOfMergeIndex := mergeColumnIndex + numExtraFields
+			fieldsToMerge := record[mergeColumnIndex : endOfMergeIndex+1]
+			rejoinedValue := strings.Join(fieldsToMerge, ",")
+
+			correctedRecord := make([]string, 0, numHeaders)
+			correctedRecord = append(correctedRecord, record[:mergeColumnIndex]...)
+			correctedRecord = append(correctedRecord, rejoinedValue)
+			correctedRecord = append(correctedRecord, record[endOfMergeIndex+1:]...)
+
+			record = correctedRecord
+		}
+
+		if len(record) != numHeaders {
+			result.TriageRows = append(result.TriageRows, TriageRow{
+				OriginalRecord: createOriginalRecordMap(record, headers),
+				FailureReason:	fmt.Sprintf("Row as %d fields, but header has %d. Triage required.", len(record), numHeaders),
+			})
+			continue RecordLoop // skip to next record
+		}
+
 		if isRowBlank(record) {
 			result.BlankRowsDiscarded++
 			continue

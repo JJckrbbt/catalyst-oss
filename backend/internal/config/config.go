@@ -15,6 +15,7 @@ type Config struct {
 	AppEnv        string
 	GCSBucketName string
 	SentryDSN     string
+	OpenAIAPIKey  string
 }
 
 // LoadConfig reads configuration from environment variables or a .env file.
@@ -49,6 +50,10 @@ func LoadConfig() (*Config, error) {
 		return nil, fmt.Errorf("FATAL: SENTRY_DSN environment variable not set")
 	}
 
+	openAIKey := os.Getenv("OPENAI_API_KEY")
+	if openAIKey == "" {
+		return nil, fmt.Errorf("FATAL: OPENAI_API_KEY environment variable not set")
+	}
 	// AppEnv can have a default value
 	appEnv := os.Getenv("APP_ENV")
 	if appEnv == "" {
@@ -62,5 +67,6 @@ func LoadConfig() (*Config, error) {
 		AppEnv:        appEnv,
 		GCSBucketName: gcsBucketName,
 		SentryDSN:     sentryDSN,
+		OpenAIAPIKey:  openAIKey,
 	}, nil
 }

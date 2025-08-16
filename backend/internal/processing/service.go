@@ -144,20 +144,40 @@ func (s *Service) saveSuccessfulItems(ctx context.Context, items []repository.It
 	}
 
 	// --- Step 2: Use pgx.CopyFrom to bulk-insert data into the temp table ---
-	_, err = tx.CopyFrom(
-		ctx,
-		pgx.Identifier{"temp_items_staging"},
-		[]string{"item_type", "scope", "business_key", "status", "custom_properties"},
-		pgx.CopyFromSlice(len(items), func(i int) ([]interface{}, error) {
-			return []interface{}{
-				items[i].ItemType,
-				items[i].Scope,
-				items[i].BusinessKey,
-				items[i].Status,
-				items[i].CustomProperties,
-			}, nil
-		}),
-	)
+
+	if len(items) > 0 && items[0].Embedding.Slice() != nil {
+		_, err = tx.CopyFrom(
+			ctx,
+			pgx.Identifier{"temp_items_staging"},
+			[]string{"item_type", "scope", "business_key", "status", "custom_properties", "embedding"},
+			pgx.CopyFromSlice(len(items), func(i int) ([]interface{}, error) {
+				return []interface{}{
+					items[i].ItemType,
+					items[i].Scope,
+					items[i].BusinessKey,
+					items[i].Status,
+					items[i].CustomProperties,
+					items[i].Embedding,
+				}, nil
+			}),
+		)
+	} else {
+		_, err = tx.CopyFrom(
+			ctx,
+			pgx.Identifier{"temp_items_staging"},
+			[]string{"item_type", "scope", "business_key", "status", "custom_properties"},
+			pgx.CopyFromSlice(len(items), func(i int) ([]interface{}, error) {
+				return []interface{}{
+					items[i].ItemType,
+					items[i].Scope,
+					items[i].BusinessKey,
+					items[i].Status,
+					items[i].CustomProperties,
+				}, nil
+			}),
+		)
+	}
+
 	if err != nil {
 		return 0, fmt.Errorf("failed to copy data to staging table: %w", err)
 	}

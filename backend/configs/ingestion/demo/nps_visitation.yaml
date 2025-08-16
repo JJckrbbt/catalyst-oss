@@ -1,0 +1,54 @@
+# /backend/configs/ingestion/demo/nps_visitation.yaml
+
+# Unique identifier for this report type.
+report_type: "NPS_VISITATION"
+
+# The item_type for this data in the generic 'items' table.
+item_type: "PARK_VISITATION"
+
+# The business key is a combination of the park name and the year.
+business_key:
+  - "park_name"
+  - "year"
+
+# The 'State' column will be used for the scope.
+scope_field: "State"
+
+column_mappings:
+  - csv_header: "ParkName"
+    json_field: "park_name"
+    attempts:
+      - validation:
+          required: true
+
+  - csv_header: "State"
+    json_field: "state_code"
+    attempts:
+      - transforms:
+          - "trim_space"
+        validation:
+          required: true
+
+  - csv_header: "Year"
+    json_field: "year"
+    attempts:
+        - validation:
+          required: true
+          regex: "^[0-9]{4}$"
+        - transforms:
+            - "to_integer"
+
+  - csv_header: "TotalVisitors"
+    json_field: "visitor_count"
+    attempts:
+      - transforms:
+          - "to_integer"
+        validation:
+          required: true
+
+  - csv_header: "Notes"
+    json_field: "notes"
+    merge_excess_fields: true
+    attempts:
+      - validation:
+          required: false

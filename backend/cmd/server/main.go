@@ -98,7 +98,7 @@ func main() {
 	// Initialize your HTTP API handlers.
 
 	itemHandler := api.NewItemHandler(platformQuerier, dbClient.Pool, apiLogger, fetcherRegistry)
-	demoHandler, err := api.NewDemoHandler(demoQuerier, apiLogger)
+	demoHandler, err := api.NewDemoHandler(demoQuerier, apiLogger, cfg.OpenAIAPIKey)
 	if err != nil {
 		appLogger.Error("Failed to initialize demo handler", "error", err)
 		os.Exit(1)
@@ -218,6 +218,9 @@ func main() {
 
 	//Upload group
 	apiGroup.POST("/upload/:reportType", uploadHandler.HandleUpload)
+
+	// RAG DEMO
+	apiGroup.POST("/demo/query", demoHandler.HandleHybridQuery)
 
 	//Upload Reporting Group
 //	uploadRoutes := apiGroup.Group("/uploads")

@@ -8,7 +8,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"os"
 	"strings"
 	"text/template"
 	"time"
@@ -20,8 +19,11 @@ import (
 
 // --- Struct Definitions ---
 
+type PlannerResponse struct {
+	ToolCalls []ToolCall `json:"tool_calls"`
+}
 type ToolCall struct {
-	ToolName  string            `json:"tool_name"`
+	ToolName  string            `json:"tool"`
 	Arguments map[string]string `json:"arguments"`
 }
 
@@ -68,9 +70,10 @@ type DemoHandler struct {
 	embeddingServiceURL string
 	plannerTemplate     *template.Template
 	synthesizerTemplate *template.Template
+	openAIAPIKey        string
 }
 
-func NewDemoHandler(q *demo.Queries, logger *slog.Logger) (*DemoHandler, error) {
+func NewDemoHandler(q *demo.Queries, logger *slog.Logger, apiKey string) (*DemoHandler, error) {
 	plannerTmpl, err := template.ParseFiles("backend/configs/prompts/planner_prompt.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse planner template: %w", err)
@@ -88,6 +91,7 @@ func NewDemoHandler(q *demo.Queries, logger *slog.Logger) (*DemoHandler, error) 
 		embeddingServiceURL: "http://localhost:5001/embed",
 		plannerTemplate:     plannerTmpl,
 		synthesizerTemplate: synthesizerTmpl,
+		openAIAPIKey:	     apiKey,
 	}, nil
 }
 
@@ -135,16 +139,16 @@ func (h *DemoHandler) getExecutionPlan(ctx context.Context, question string) ([]
 		return nil, err
 	}
 	
-	var plan []ToolCall
 	cleanedJSON := strings.TrimSpace(llmResponseContent)
 	cleanedJSON = strings.TrimPrefix(cleanedJSON, "```json")
 	cleanedJSON = strings.TrimSuffix(cleanedJSON, "```")
 	
-	if err := json.Unmarshal([]byte(cleanedJSON), &plan); err != nil {
+	var plannerResponse PlannerResponse
+	if err := json.Unmarshal([]byte(cleanedJSON), &plannerResponse); err != nil {
 		return nil, fmt.Errorf("failed to unmarshal tool call plan from LLM content: %w. Raw content: %s", err, llmResponseContent)
 	}
 
-	return plan, nil
+	return plannerResponse.ToolCalls, nil
 }
 
 func (h *DemoHandler) getContextFromPlan(ctx context.Context, plan []ToolCall) (*HybridContext, error) {
@@ -253,7 +257,7 @@ func (h *DemoHandler) getEmbedding(ctx context.Context, textToEmbed string) ([]f
 }
 
 func (h *DemoHandler) callLLM(ctx context.Context, prompt string, useJSONMode bool) (string, error) {
-	apiKey := os.Getenv("OPENAI_API_KEY")
+	apiKey := h.openAIAPIKey
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENAI_API_KEY environment variable not set")
 	}

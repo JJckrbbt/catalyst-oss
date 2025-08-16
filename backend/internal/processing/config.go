@@ -21,6 +21,7 @@ type ProcessingAttempt struct {
 type ColumnMapping struct {
 	CSVHeader string              `yaml:"csv_header"`
 	JSONField string              `yaml:"json_field"`
+	MergeExcessFields bool	      `yaml:"merge_excess_fields,omitempty"`
 	Attempts  []ProcessingAttempt `yaml:"attempts"`
 }
 

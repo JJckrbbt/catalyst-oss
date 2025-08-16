@@ -22,7 +22,7 @@ CREATE TABLE "items" (
 	"custom_properties" JSONB NOT NULL DEFAULT '{}'::jsonb,
 
 	-- RAG PREPARATION on TABLE
-	"embedding" vector(1536),
+	"embedding" vector(384),
 
 	"created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 	"updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),

@@ -13,6 +13,9 @@ scope_field: "document_source"
 business_key:
   - "metadata.chunk_hash"
 
+embed_content:
+  source_columns:
+    - "content"
 column_mappings:
     # The main text content to be used for semantic search and embeddings.
   - csv_header: "chunk_text"

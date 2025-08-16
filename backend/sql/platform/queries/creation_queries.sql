@@ -5,10 +5,11 @@ INSERT INTO items (
 	item_type, 
 	scope,
 	business_key,
-	status, 
-	custom_properties
+	status,
+	custom_properties,
+	embedding
 ) VALUES (
-	$1, $2, $3, $4, $5
+	$1, $2, $3, $4, $5, $6
 )
 RETURNING *;
 

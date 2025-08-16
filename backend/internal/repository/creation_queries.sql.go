@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
 
 const createIngestionJob = `-- name: CreateIngestionJob :one
@@ -70,20 +71,22 @@ INSERT INTO items (
 	item_type, 
 	scope,
 	business_key,
-	status, 
-	custom_properties
+	status,
+	custom_properties,
+	embedding
 ) VALUES (
-	$1, $2, $3, $4, $5
+	$1, $2, $3, $4, $5, $6
 )
 RETURNING id, item_type, scope, business_key, status, custom_properties, embedding, created_at, updated_at
 `
 
 type CreateItemParams struct {
-	ItemType         ItemType    `json:"item_type"`
-	Scope            pgtype.Text `json:"scope"`
-	BusinessKey      pgtype.Text `json:"business_key"`
-	Status           ItemStatus  `json:"status"`
-	CustomProperties []byte      `json:"custom_properties"`
+	ItemType         ItemType        `json:"item_type"`
+	Scope            pgtype.Text     `json:"scope"`
+	BusinessKey      pgtype.Text     `json:"business_key"`
+	Status           ItemStatus      `json:"status"`
+	CustomProperties []byte          `json:"custom_properties"`
+	Embedding        pgvector.Vector `json:"embedding"`
 }
 
 // Inserts a new item record into database
@@ -95,6 +98,7 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 		arg.BusinessKey,
 		arg.Status,
 		arg.CustomProperties,
+		arg.Embedding,
 	)
 	var i Item
 	err := row.Scan(
