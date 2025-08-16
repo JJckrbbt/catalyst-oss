@@ -1,0 +1,49 @@
+# /backend/configs/ingestion/demo/apollo_mission_facts.yaml
+
+# Unique identifier for this report type.
+report_type: "APOLLO_MISSION_FACTS"
+
+# The item_type for this data in the generic 'items' table.
+item_type: "MISSION_FACTS"
+
+# The business key is the unique Mission name.
+business_key:
+  - "Mission"
+
+scope_field: "Program"
+# All data will be stored in the custom_properties JSONB field.
+# For this dataset, we'll assign a static scope in the Go code upon ingestion,
+# as there isn't a natural scope column in the source CSV.
+column_mappings:
+  - csv_header: "Program"
+    json_field: "Program"
+    data_type: "text"
+    validations:
+      - type: "required"
+
+  - csv_header: "Mission"
+    json_field: "Mission"
+    data_type: "text"
+    validations:
+      - type: "required"
+
+  - csv_header: "Commander"
+    json_field: "Commander"
+    data_type: "text"
+
+  - csv_header: "LunarModulePilot"
+    json_field: "LunarModulePilot"
+    data_type: "text"
+
+  - csv_header: "LaunchDate"
+    json_field: "LaunchDate"
+    data_type: "date"
+    transformations:
+      - type: "parse_date"
+        formats: ["2006-01-02"] # YYYY-MM-DD format
+    validations:
+      - type: "required"
+
+  - csv_header: "LandingSite"
+    json_field: "LandingSite"
+    data_type: "text"

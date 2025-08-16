@@ -1,0 +1,300 @@
+package processing
+
+import (
+	"context"
+	"encoding/csv"
+	"encoding/json"
+	"fmt"
+	"io"
+	"log/slog"
+	"strings"
+
+	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
+	"github.com/jjckrbbt/catalyst/backend/internal/interfaces"
+	"github.com/jjckrbbt/catalyst/backend/internal/repository"
+)
+
+// Processor defines the standard interface for any processor.
+type Processor interface {
+	Process(
+		ctx context.Context,
+		file io.Reader,
+		queries repository.Querier,
+	) (*ProcessingResult, error)
+}
+
+// ProcessingResult holds the outcome of a file processing operation
+type ProcessingResult struct {
+	SuccessfulItems    []repository.Item
+	TriageRows         []TriageRow
+	BlankRowsDiscarded int
+}
+
+// TriageRow represents a row that failed processing and needs human review
+type TriageRow struct {
+	OriginalRecord map[string]string `json:"original_record"`
+	FailureReason  string            `json:"failure_reason"`
+}
+
+// GenericProcessor uses an IngestionConfig to process a CSV file
+type GenericProcessor struct {
+	config IngestionConfig
+}
+
+// NewGenericProcessor creates a new processor with a specific configuration
+func NewGenericProcessor(config IngestionConfig) *GenericProcessor {
+	return &GenericProcessor{config: config}
+}
+
+// Process is the main entry point that executes the entire ingestion logic
+func (p *GenericProcessor) Process(
+	ctx context.Context,
+	file io.Reader,
+	queries repository.Querier,
+	embedder interfaces.EmbedderFunc,
+) (*ProcessingResult, error) {
+	result := &ProcessingResult{}
+	csvReader := csv.NewReader(file)
+	csvReader.TrimLeadingSpace = true
+
+	headers, err := csvReader.Read()
+	if err != nil {
+		return nil, fmt.Errorf("error reading header row: %w", err)
+	}
+
+	headerMap := make(map[string]int)
+	for i, h := range headers {
+		headerMap[strings.TrimSpace(h)] = i
+	}
+
+	allRecords, err := csvReader.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read all CSV records: %w", err)
+	}
+
+	var scopeJSONField string
+	for _, mapping := range p.config.ColumnMappings {
+		if mapping.CSVHeader == p.config.ScopeField {
+			scopeJSONField = mapping.JSONField
+			break
+		}
+	}
+	if scopeJSONField == "" {
+		return nil, fmt.Errorf("config validation error: could not find a column mapping for the specified scope_field '%s'", p.config.ScopeField)
+	}
+
+RecordLoop:
+	for i, record := range allRecords {
+		if isRowBlank(record) {
+			result.BlankRowsDiscarded++
+			continue
+		}
+
+		processedData, err := p.processRow(ctx, record, headerMap, queries)
+		if err != nil {
+			result.TriageRows = append(result.TriageRows, TriageRow{
+				OriginalRecord: createOriginalRecordMap(record, headers),
+				FailureReason:  err.Error(),
+			})
+			continue
+		}
+
+		var embedding pgvector.Vector
+		if p.config.EmbedContent != nil && embedder != nil {
+
+			var textToEmbedBuilder strings.Builder
+			for _, colName := range p.config.EmbedContent.SourceColumns {
+				if val, ok := processedData[colName]; ok {
+					textToEmbedBuilder.WriteString(fmt.Sprintf("%v ", val))
+				}
+			}
+			textToEmbed := strings.TrimSpace(textToEmbedBuilder.String())
+
+			if textToEmbed != "" {
+				slog.Debug("Generating embedding for text", "text", textToEmbed)
+				embeddingVector, err := embedder(ctx, textToEmbed)
+				if err != nil {
+					triageRow := TriageRow{
+						OriginalRecord: createOriginalRecordMap(record, headers),
+						FailureReason: fmt.Sprintf("Row %d: failed to generate embedding: %s", i+2, err.Error()),
+					}
+					result.TriageRows = append(result.TriageRows, triageRow)
+					continue
+				}
+				embedding = pgvector.NewVector(embeddingVector)
+
+			}
+		}
+
+		customPropsJSON, err := json.Marshal(processedData)
+		if err != nil {
+			result.TriageRows = append(result.TriageRows, TriageRow{
+				OriginalRecord: createOriginalRecordMap(record, headers),
+				FailureReason:  fmt.Sprintf("Row %d: failed to marshal processed data to JSON: %s", i+2, err.Error()),
+			})
+			continue
+		}
+
+		scopeVal, ok := processedData[scopeJSONField]
+		if !ok || scopeVal == nil {
+			result.TriageRows = append(result.TriageRows, TriageRow{
+				OriginalRecord: createOriginalRecordMap(record, headers),
+				FailureReason:  fmt.Sprintf("scope field '%s' is missing or nil", scopeJSONField),
+			})
+			continue
+		}
+
+		scopeString, ok := scopeVal.(string)
+		if !ok {
+			result.TriageRows = append(result.TriageRows, TriageRow{
+				OriginalRecord: createOriginalRecordMap(record, headers),
+				FailureReason:  fmt.Sprintf("scope field '%s' is not a string", scopeJSONField),
+			})
+			continue
+		}
+
+		// --- LOGIC FIX ---
+		// Build the business key, and if any part is missing, triage the row ONCE and move to the next record.
+		var businessKeyParts []string
+		for _, field := range p.config.BusinessKey {
+			val, ok := processedData[field]
+			if !ok || val == nil {
+				result.TriageRows = append(result.TriageRows, TriageRow{
+					OriginalRecord: createOriginalRecordMap(record, headers),
+					FailureReason:  fmt.Sprintf("business key field '%s' is missing or nil", field),
+				})
+				continue RecordLoop // This is the key change to prevent multiple errors for one row
+			}
+			businessKeyParts = append(businessKeyParts, fmt.Sprintf("%v", val))
+		}
+		// --- END FIX ---
+
+		item := repository.Item{
+			ItemType:         repository.ItemType(p.config.ItemType),
+			Scope:            pgtype.Text{String: scopeString, Valid: true},
+			BusinessKey:      pgtype.Text{String: strings.Join(businessKeyParts, "-"), Valid: true},
+			Status:           "active",
+			CustomProperties: customPropsJSON,
+			Embedding:	  embedding,
+		}
+		result.SuccessfulItems = append(result.SuccessfulItems, item)
+	}
+
+	slog.InfoContext(ctx, "Processing complete",
+		"successful_items", len(result.SuccessfulItems),
+		"triage_rows", len(result.TriageRows),
+		"blank_rows_discarded", result.BlankRowsDiscarded,
+	)
+	return result, nil
+}
+
+// processRow handles the 'attempts' logic for a single, non-blank row.
+func (p *GenericProcessor) processRow(ctx context.Context, record []string, headerMap map[string]int, queries repository.Querier) (map[string]interface{}, error) {
+	processedData := make(map[string]interface{})
+
+	for _, mapping := range p.config.ColumnMappings {
+		colIdx, ok := headerMap[mapping.CSVHeader]
+		if !ok {
+			return nil, fmt.Errorf("missing required header: %s", mapping.CSVHeader)
+		}
+
+		var rawValue string
+		if colIdx < len(record) {
+			rawValue = record[colIdx]
+		}
+
+		var finalValue interface{} = rawValue
+		var attemptSuccessful bool = true
+		var lastErr error
+
+		if len(mapping.Attempts) > 0 {
+			attemptSuccessful = false
+
+			for _, attempt := range mapping.Attempts {
+				transformedValue, err := applyTransforms(rawValue, attempt.Transforms)
+				if err != nil {
+					lastErr = err
+					continue
+				}
+
+				if err := applyValidation(ctx, queries, transformedValue, attempt.Validation); err != nil {
+					lastErr = err
+					continue
+				}
+
+				finalValue = transformedValue
+				attemptSuccessful = true
+				break
+			}
+		}
+
+		if !attemptSuccessful {
+			if lastErr == nil {
+				return nil, fmt.Errorf("all processing attempts failed for column '%s' with value '%s', but no specific error was captured. Check YAML for empty attempts.", mapping.CSVHeader, rawValue)
+			}
+			return nil, fmt.Errorf("all processing attempts failed for column '%s' with value '%s'. Last error: %w", mapping.CSVHeader, rawValue, lastErr)
+		}
+		processedData[mapping.JSONField] = finalValue
+	}
+
+	return processedData, nil
+}
+
+// --- Helper functions ---
+
+func isRowBlank(record []string) bool {
+	for _, field := range record {
+		if strings.TrimSpace(field) != "" {
+			return false
+		}
+	}
+	return true
+}
+
+func createOriginalRecordMap(record []string, headers []string) map[string]string {
+	rowMap := make(map[string]string)
+	for i, header := range headers {
+		if i < len(record) {
+			rowMap[header] = record[i]
+		} else {
+			rowMap[header] = ""
+		}
+	}
+	return rowMap
+}
+
+func applyTransforms(value string, transforms []string) (interface{}, error) {
+	var currentValue interface{} = value
+	for _, transformCall := range transforms {
+		parts := strings.SplitN(transformCall, ":", 2)
+		transformName := parts[0]
+		var arg string
+		if len(parts) > 1 {
+			arg = parts[1]
+		}
+		transformer, ok := transformRegistry[transformName]
+		if !ok {
+			return nil, fmt.Errorf("unknown transform function: %s", transformName)
+		}
+		newValue, err := transformer(currentValue, arg)
+		if err != nil {
+			return nil, fmt.Errorf("transform '%s' failed: %w", transformName, err)
+		}
+		currentValue = newValue
+	}
+	return currentValue, nil
+}
+
+func applyValidation(ctx context.Context, queries repository.Querier, value interface{}, rules ValidationRule) error {
+	if str, ok := value.(string); ok && str == "" && !rules.Required {
+		return nil
+	}
+	for name, validationFunc := range validationRegistry {
+		err := validationFunc(ctx, queries, value, rules)
+		if err != nil {
+			return fmt.Errorf("validation rule '%s' failed: %w", name, err)
+		}
+	}
+	return nil
+}
