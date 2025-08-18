@@ -79,12 +79,12 @@ migrate-down-all:
 
 ## build-backend: Compiles the Go backend application
 build-backend:
-	@echo "Building backend..."
+##	@echo "Building backend..."
 	cd backend && go build -o ../catalyst-server ./cmd/server
 
 ## run-backend: Runs the compiled Go backend application
 run-backend: build-backend
-	@echo "Running backend server..."
+##	@echo "Running backend server..."
 	./catalyst-server
 
 # ====================================================================================

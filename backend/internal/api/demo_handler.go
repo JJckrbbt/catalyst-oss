@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -12,6 +13,7 @@ import (
 	"text/template"
 	"time"
 
+	"github.com/jackc/pgx/v5"
 	"github.com/jjckrbbt/catalyst/backend/internal/apps/demo"
 	"github.com/labstack/echo/v4"
 	"github.com/pgvector/pgvector-go"
@@ -125,6 +127,8 @@ func (h *DemoHandler) HandleHybridQuery(c echo.Context) error {
 		return echo.NewHTTPError(http.StatusInternalServerError, "Error synthesizing answer")
 	}
 
+	reqLogger.InfoContext(ctx, "RAG pipeline complete. Final answer synthesized.", "answer", finalAnswer)
+
 	return c.JSON(http.StatusOK, map[string]interface{}{"answer": finalAnswer})
 }
 
@@ -180,7 +184,7 @@ func (h *DemoHandler) getContextFromPlan(ctx context.Context, plan []ToolCall) (
 				return nil, fmt.Errorf("failed to get embedding for context search: %w", err)
 			}
 			chunks, err := h.queries.FindSimilarMissionKnowledge(ctx, pgvector.NewVector(embedding))
-			if err != nil {
+			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
 				reqLogger.ErrorContext(ctx, "Failed to execute FindSimilarMissionKnowledge", "error", err, "search_query", searchQuery)
 				continue
 			}
@@ -257,6 +261,8 @@ func (h *DemoHandler) getEmbedding(ctx context.Context, textToEmbed string) ([]f
 }
 
 func (h *DemoHandler) callLLM(ctx context.Context, prompt string, useJSONMode bool) (string, error) {
+	h.logger.DebugContext(ctx, "Executing LLM call", "prompt", prompt)
+
 	apiKey := h.openAIAPIKey
 	if apiKey == "" {
 		return "", fmt.Errorf("OPENAI_API_KEY environment variable not set")

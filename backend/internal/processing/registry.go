@@ -7,6 +7,7 @@ import (
 	"regexp"
 	"strings"
 	"time"
+	"strconv"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jjckrbbt/catalyst/backend/internal/repository"
@@ -59,8 +60,23 @@ func transformToUppercase(input interface{}, arg string) (interface{}, error) {
 }
 
 func transformToInteger(input interface{}, arg string) (interface{}, error) {
-	// Implementation for converting string to int
-	return 0, nil
+	str, ok := input.(string)
+	if !ok {
+		return nil, fmt.Errorf("to_integer requires a string input")
+	}
+
+	cleanStr := strings.ReplaceAll(str, ",", "")
+	cleanStr = strings.TrimSpace(cleanStr)
+
+	if cleanStr == "" {
+		return nil, nil
+	}
+
+	i, err := strconv.ParseInt(cleanStr, 10, 64)
+	if err != nil {
+		return nil, fmt.Errorf("could not parse '%s' as integer: %w", str, err)
+	}
+	return i, nil
 }
 
 func transformToDecimal(input interface{}, arg string) (interface{}, error) {
@@ -98,12 +114,42 @@ func validationRequired(ctx context.Context, queries repository.Querier, input i
 	if !rule.Required {
 		return nil
 	}
-	str, ok := input.(string)
-	if !ok {
-		return nil
-	}
-	if str == "" {
+	if input == nil {
 		return fmt.Errorf("is a required field")
+	}
+
+	allowZero := true
+	if rule.AllowZero != nil && !*rule.AllowZero {
+		allowZero = false
+	}
+
+	switch v := input.(type) {
+	case string:
+		if strings.TrimSpace(v) == "" {
+		return fmt.Errorf("is a required field")
+		}
+	case int, int32, int64:
+		var val int64
+		switch i := v.(type) {
+		case int:
+			val = int64(i)
+		case int32:
+			val = int64(i)
+		case int64:
+			val = i
+		}
+		if !allowZero && val == 0 {
+			return fmt.Errorf("is a required field and zero is not an allowed value")
+		}
+	
+	case decimal.Decimal:
+		if !allowZero && v.IsZero() {
+			return fmt.Errorf("is a required field and zero is not an allowed value")
+		}
+	case time.Time:
+		if v.IsZero() {
+			return fmt.Errorf("is a required field")
+		}
 	}
 	return nil
 }

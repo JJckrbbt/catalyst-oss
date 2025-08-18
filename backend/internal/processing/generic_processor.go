@@ -190,7 +190,6 @@ RecordLoop:
 			continue
 		}
 
-		// --- LOGIC FIX ---
 		// Build the business key, and if any part is missing, triage the row ONCE and move to the next record.
 		var businessKeyParts []string
 		for _, field := range p.config.BusinessKey {
@@ -204,7 +203,6 @@ RecordLoop:
 			}
 			businessKeyParts = append(businessKeyParts, fmt.Sprintf("%v", val))
 		}
-		// --- END FIX ---
 
 		item := repository.Item{
 			ItemType:         repository.ItemType(p.config.ItemType),
@@ -240,38 +238,33 @@ func (p *GenericProcessor) processRow(ctx context.Context, record []string, head
 			rawValue = record[colIdx]
 		}
 
-		var finalValue interface{} = rawValue
-		var attemptSuccessful bool = true
-		var lastErr error
+		var transformedValue interface{} = rawValue
+		var transformError error
+		var transformSuccessful bool = false
 
 		if len(mapping.Attempts) > 0 {
-			attemptSuccessful = false
-
 			for _, attempt := range mapping.Attempts {
-				transformedValue, err := applyTransforms(rawValue, attempt.Transforms)
-				if err != nil {
-					lastErr = err
-					continue
+				val, err := applyTransforms(rawValue, attempt.Transforms)
+				if err == nil {
+					transformedValue = val
+					transformSuccessful = true
+					break
 				}
-
-				if err := applyValidation(ctx, queries, transformedValue, attempt.Validation); err != nil {
-					lastErr = err
-					continue
-				}
-
-				finalValue = transformedValue
-				attemptSuccessful = true
-				break
+				transformError = err
 			}
+
+			if !transformSuccessful {
+				return nil, fmt.Errorf("all transform attempts failed for column '%s' with value '%s': %w", mapping.CSVHeader, rawValue, transformError)
+			}
+		} else {
+			transformSuccessful = true
 		}
 
-		if !attemptSuccessful {
-			if lastErr == nil {
-				return nil, fmt.Errorf("all processing attempts failed for column '%s' with value '%s', but no specific error was captured. Check YAML for empty attempts.", mapping.CSVHeader, rawValue)
-			}
-			return nil, fmt.Errorf("all processing attempts failed for column '%s' with value '%s'. Last error: %w", mapping.CSVHeader, rawValue, lastErr)
+		if err := applyValidation(ctx, queries, transformedValue, mapping.Validation); err != nil {
+			return nil, fmt.Errorf("validation failed for column '%s' with value '%v': %w", mapping.CSVHeader, transformedValue, err)
 		}
-		processedData[mapping.JSONField] = finalValue
+
+		processedData[mapping.JSONField] = transformedValue
 	}
 
 	return processedData, nil

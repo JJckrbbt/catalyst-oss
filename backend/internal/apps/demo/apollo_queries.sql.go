@@ -14,7 +14,7 @@ import (
 const findSimilarMissionKnowledge = `-- name: FindSimilarMissionKnowledge :many
 SELECT
     id,
-    chunk_text,
+    COALESCE(chunk_text, '')::TEXT AS chunk_text,
     embedding <=> $1 AS similarity_score
 FROM
     vw_apollo_mission_knowledge

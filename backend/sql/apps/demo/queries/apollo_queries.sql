@@ -9,7 +9,7 @@ WHERE mission_name = $1;
 -- to a given input embedding, ordered by similarity (vector cosine distance).
 SELECT
     id,
-    chunk_text,
+    COALESCE(chunk_text, '')::TEXT AS chunk_text,
     embedding <=> $1 AS similarity_score
 FROM
     vw_apollo_mission_knowledge

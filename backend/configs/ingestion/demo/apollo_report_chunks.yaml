@@ -6,7 +6,7 @@ report_type: "APOLLO_REPORT_CHUNKS"
 # The item_type for this data, categorized for the RAG application.
 item_type: "KNOWLEDGE_CHUNK"
 
-# The 'document_source' column will be used for high-level filtering (e.g., scope='Apollo 11 Mission Report').
+# The 'document_source' column will be used for high-level filtering.
 scope_field: "document_source"
 
 # The 'chunk_hash' is the unique business key for each text chunk.
@@ -16,24 +16,21 @@ business_key:
 embed_content:
   source_columns:
     - "content"
+
 column_mappings:
     # The main text content to be used for semantic search and embeddings.
   - csv_header: "chunk_text"
     json_field: "content"
-    attempts:
-      - validation:
-          required: true
+    validation:
+      required: true
 
-    # The rest of the columns are mapped into a nested 'metadata' object
-    # for structured filtering on top of semantic search.
+    # The rest of the columns are mapped into a nested 'metadata' object.
   - csv_header: "document_source"
     json_field: "metadata.source"
-    attempts:
-      - validation:
-          required: true
+    validation:
+      required: true
 
   - csv_header: "chunk_hash"
     json_field: "metadata.chunk_hash"
-    attempts:
-      - validation:
-          required: true
+    validation:
+      required: true

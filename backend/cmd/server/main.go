@@ -40,7 +40,7 @@ func main() {
 		Dsn:              cfg.SentryDSN,
 		Environment:      cfg.AppEnv,
 		TracesSampleRate: 1.0,
-		Debug:            true,
+		Debug:            false,
 	}); err != nil {
 		fmt.Printf("Sentry initialization failed: %v\n", err)
 	}

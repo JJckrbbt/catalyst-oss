@@ -30,7 +30,7 @@ SELECT
     item.embedding,
 
     -- Unpacked text content from JSONB
-    (item.custom_properties->>'chunk_text')::TEXT AS chunk_text
+    (item.custom_properties->>'content')::TEXT AS chunk_text
 FROM
     items AS item
 WHERE

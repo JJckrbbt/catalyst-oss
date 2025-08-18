@@ -6,6 +6,7 @@ import "fmt"
 // yaml tags tell our parser how to map the YAML fields to our struct
 type ValidationRule struct {
 	Required      bool     `yaml:"required"`
+	AllowZero     *bool	`yaml:"allow_zero,omitempty"`
 	Enum          []string `yaml:"enum"`
 	Regex         string   `yaml:"regex"`
 	ExistsInItems string   `yaml:"exists_in_items,omitempty"`
@@ -14,7 +15,6 @@ type ValidationRule struct {
 // ProcessingAttempt defines an attempt to process an item
 type ProcessingAttempt struct {
 	Transforms []string       `yaml:"transforms,omitempty"`
-	Validation ValidationRule `yaml:"validation"`
 }
 
 // ColumnMapping defines how to map and transform a single CSV column
@@ -23,6 +23,7 @@ type ColumnMapping struct {
 	JSONField string              `yaml:"json_field"`
 	MergeExcessFields bool	      `yaml:"merge_excess_fields,omitempty"`
 	Attempts  []ProcessingAttempt `yaml:"attempts"`
+	Validation	ValidationRule	`yaml:"validation"`
 }
 
 // EmbedContent defines the configuration for generating embeddings during ingestion
