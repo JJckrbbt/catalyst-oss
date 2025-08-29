@@ -2,7 +2,7 @@
 // versions:
 //   sqlc v1.29.0
 
-package demo
+package insurance
 
 import (
 	"database/sql/driver"
@@ -252,34 +252,34 @@ type UserScopeAccess struct {
 	Scope  string `json:"scope"`
 }
 
-type VwApolloMissionFact struct {
-	ID               int64       `json:"id"`
-	ItemType         ItemType    `json:"item_type"`
-	BusinessKey      pgtype.Text `json:"business_key"`
-	MissionName      string      `json:"mission_name"`
-	Commander        string      `json:"commander"`
-	LunarModulePilot string      `json:"lunar_module_pilot"`
-	LaunchDate       pgtype.Date `json:"launch_date"`
-	LandingSite      string      `json:"landing_site"`
+type VwInsuranceClaim struct {
+	ID                int64              `json:"id"`
+	ItemType          ItemType           `json:"item_type"`
+	ClaimID           pgtype.Text        `json:"claim_id"`
+	PolicyNumber      pgtype.Text        `json:"policy_number"`
+	Status            ItemStatus         `json:"status"`
+	Embedding         pgvector.Vector    `json:"embedding"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	PolicyholderID    string             `json:"policyholder_id"`
+	ClaimType         string             `json:"claim_type"`
+	DateOfLoss        pgtype.Date        `json:"date_of_loss"`
+	DescriptionOfLoss string             `json:"description_of_loss"`
+	ClaimAmount       pgtype.Numeric     `json:"claim_amount"`
+	AdjusterAssigned  string             `json:"adjuster_assigned"`
 }
 
-type VwApolloMissionKnowledge struct {
-	ID          int64           `json:"id"`
-	ItemType    ItemType        `json:"item_type"`
-	BusinessKey pgtype.Text     `json:"business_key"`
-	Embedding   pgvector.Vector `json:"embedding"`
-	ChunkText   string          `json:"chunk_text"`
-}
-
-type VwNpsVisitation struct {
-	ID           int64              `json:"id"`
-	ItemType     ItemType           `json:"item_type"`
-	StateCode    pgtype.Text        `json:"state_code"`
-	Status       ItemStatus         `json:"status"`
-	CreatedAt    pgtype.Timestamptz `json:"created_at"`
-	UpdatedAt    pgtype.Timestamptz `json:"updated_at"`
-	ParkName     string             `json:"park_name"`
-	Year         int32              `json:"year"`
-	VisitorCount int64              `json:"visitor_count"`
-	Notes        string             `json:"notes"`
+type VwPolicyholder struct {
+	ID                int64              `json:"id"`
+	ItemType          ItemType           `json:"item_type"`
+	PolicyholderID    pgtype.Text        `json:"policyholder_id"`
+	State             pgtype.Text        `json:"state"`
+	Status            ItemStatus         `json:"status"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	PolicyholderName  string             `json:"policyholder_name"`
+	City              string             `json:"city"`
+	CustomerSinceDate pgtype.Date        `json:"customer_since_date"`
+	CustomerLevel     string             `json:"customer_level"`
+	ActivePolicies    []byte             `json:"active_policies"`
 }

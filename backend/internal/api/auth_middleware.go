@@ -8,7 +8,7 @@ import (
 )
 
 type AuthMiddleware struct {
-	// In a real app, you'd have fields for a JWT validator, etc.
+	// Fields for a JWT validator, etc.
 }
 
 func NewAuthMiddleware(domain, audience string, q repository.Querier, logger *slog.Logger) (*AuthMiddleware, error) {
@@ -17,7 +17,7 @@ func NewAuthMiddleware(domain, audience string, q repository.Querier, logger *sl
 
 func (m *AuthMiddleware) ValidateRequest(next echo.HandlerFunc) echo.HandlerFunc {
 	return func(c echo.Context) error {
-		// Real JWT validation logic would go here.
+		// Real JWT validation logic goes here.
 		return next(c)
 	}
 }

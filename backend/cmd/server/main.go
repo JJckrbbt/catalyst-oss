@@ -19,6 +19,7 @@ import (
 	"github.com/jjckrbbt/catalyst/backend/internal/processing"
 	"github.com/jjckrbbt/catalyst/backend/internal/repository"
 	"github.com/jjckrbbt/catalyst/backend/internal/apps/demo"
+	"github.com/jjckrbbt/catalyst-oss/backend/internal/apps/insurance"
 
 	"github.com/getsentry/sentry-go"
 	sentryecho "github.com/getsentry/sentry-go/echo"
@@ -72,6 +73,7 @@ func main() {
 	// 5. Initialize Core Application Components.
 	platformQuerier := repository.New(dbClient.Pool)
 	demoQuerier := demo.New(dbClient.Pool)
+	insuranceQuerier := insurance.New(dbClient.Pool)
 
 	apiLogger := appLogger.With("service", "api_handlers")
 
@@ -105,6 +107,7 @@ func main() {
 	}
 
 	uploadHandler := api.NewUploadHandler(ingestionService, processingService, demoHandler, configLoader, apiLogger)
+	insuranceHandler := api.NewInsuranceHandler(insuranceQuerier, apiLogger)
 	
 	appLogger.Info("API handlers initialized.")
 

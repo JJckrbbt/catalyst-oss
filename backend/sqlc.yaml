@@ -8,7 +8,7 @@ sql:
     engine: "postgresql"
     gen:
       go:
-        package: "repository" # The main, generic querier
+        package: "repository"
         out: "internal/repository"
         sql_package: "pgx/v5"
         emit_json_tags: true
@@ -16,14 +16,29 @@ sql:
 
   # --- Public Application-Specific Querier ---
   - schema:
-      - "sql/platform/migrations/" # It needs to know about the platform tables...
-      - "sql/apps/demo/migrations/" # ...and its own views
+      - "sql/platform/migrations/"
+      - "sql/apps/demo/migrations/"
     queries: "sql/apps/demo/queries/"
     engine: "postgresql"
     gen:
       go:
-        package: "demo" # A new package just for Public queries
-        out: "internal/apps/demo" # Output to its own domain package
+        package: "demo"
+        out: "internal/apps/demo"
+        sql_package: "pgx/v5"
+        emit_json_tags: true
+        emit_interface: true
+
+
+  # --- Insurance App Querier ----
+  - schema:
+      - "sql/platform/migrations/"
+      - "sql/apps/insurance/migrations"
+    queries: "sql/apps/insurance/queries/"
+    engine: "postgresql"
+    gen:
+      go:
+        package: "insurance"
+        out: "internal/apps/insurance"
         sql_package: "pgx/v5"
         emit_json_tags: true
         emit_interface: true

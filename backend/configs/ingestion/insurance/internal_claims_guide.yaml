@@ -1,0 +1,55 @@
+# /backend/configs/ingestion/insurance/internal_claims_guide.yaml
+
+report_type: "INTERNAL_CLAIMS_GUIDE"
+item_type: "KNOWLEDGE_CHUNK"
+scope_field: "document_name"
+business_key:
+  - "metadata.document_id"
+  - "metadata.chunk_number"
+embed_content:
+  source_columns:
+    - "chunked_text"
+
+column_mappings:
+  - csv_header: "chunked_text"
+    json_field: "chunk_text"
+    validation:
+      required: true
+
+  - csv_header: "document_name"
+    json_field: "metadata.document_name"
+    validation:
+      required: true
+
+  - csv_header: "document"
+    json_field: "metadata.document_id"
+    validation:
+      required: true
+
+  - csv_header: "chunk_num"
+    json_field: "metadata.chunk_number"
+    attempts:
+      - transforms:
+          - "to_integer"
+    validation:
+      required: true
+
+  - csv_header: "section"
+    json_field: "metadata.section"
+    validation:
+      required: false
+
+  - csv_header: "last_update"
+    json_field: "metadata.last_update"
+    attempts:
+      - transforms:
+          - "to_date:2-Jan-06"
+      - transforms:
+          - "to_date:2006-01-02"
+    validation:
+      required: false
+  
+  - csv_header: "custom properties"
+    json_field: "metadata.source_custom_properties"
+    validation:
+      required: false

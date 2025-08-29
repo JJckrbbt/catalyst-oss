@@ -12,7 +12,9 @@ CREATE TYPE item_status AS ENUM (
 CREATE TYPE item_type AS ENUM (
 	'KNOWLEDGE_CHUNK',
 	'PARK_VISITATION',
-	'MISSION_FACTS'
+	'MISSION_FACTS',
+	'POLICYHOLDER',
+	'INSURANCE_CLAIM'
 );
 
 -- Hint for SQLC: Creating empty placeholders for views that have complex dependencies

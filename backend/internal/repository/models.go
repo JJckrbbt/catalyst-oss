@@ -61,6 +61,8 @@ const (
 	ItemTypeKNOWLEDGECHUNK ItemType = "KNOWLEDGE_CHUNK"
 	ItemTypePARKVISITATION ItemType = "PARK_VISITATION"
 	ItemTypeMISSIONFACTS   ItemType = "MISSION_FACTS"
+	ItemTypePOLICYHOLDER   ItemType = "POLICYHOLDER"
+	ItemTypeINSURANCECLAIM ItemType = "INSURANCE_CLAIM"
 )
 
 func (e *ItemType) Scan(src interface{}) error {
