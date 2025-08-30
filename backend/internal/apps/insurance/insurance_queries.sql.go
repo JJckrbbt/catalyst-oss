@@ -11,14 +11,15 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
-const getPolicyholderBYID = `-- name: GetPolicyholderBYID :one
+const getPolicyholderByID = `-- name: GetPolicyholderByID :one
 SELECT id, item_type, policyholder_id, state, status, created_at, updated_at, policyholder_name, city, customer_since_date, customer_level, active_policies
 FROM vw_policyholders
 WHERE policyholder_id = $1
 `
 
-func (q *Queries) GetPolicyholderBYID(ctx context.Context, policyholderID pgtype.Text) (VwPolicyholder, error) {
-	row := q.db.QueryRow(ctx, getPolicyholderBYID, policyholderID)
+// Fetches a single policyholder by their unique PolicyHolder_ID.
+func (q *Queries) GetPolicyholderByID(ctx context.Context, policyholderID pgtype.Text) (VwPolicyholder, error) {
+	row := q.db.QueryRow(ctx, getPolicyholderByID, policyholderID)
 	var i VwPolicyholder
 	err := row.Scan(
 		&i.ID,
@@ -39,29 +40,30 @@ func (q *Queries) GetPolicyholderBYID(ctx context.Context, policyholderID pgtype
 
 const listClaims = `-- name: ListClaims :many
 
-SELECT id, item_type, claim_id, policy_number, status, embedding, created_at, updated_at, policyholder_id, claim_type, date_of_loss, description_of_loss, claim_amount, adjuster_assigned
+SELECT id, item_type, claim_id, policy_number, system_status, embedding, created_at, updated_at, policyholder_id, claim_type, date_of_loss, description_of_loss, claim_amount, business_status, adjuster_assigned
 FROM vw_insurance_claims
 WHERE
-	($3::TEXT IS NULL OR adjuster_assigned = $3)
+    adjuster_assigned = COALESCE($3, adjuster_assigned)
 AND
-	($4::TEXT IS NULL OR status = $4)
+    business_status = COALESCE($4, business_status)
 AND
-	($5::TEXT IS NULL OR policy_number = $5)
+    policy_number = COALESCE($5, policy_number)
 ORDER BY
-	date_of_loss DESC
+    date_of_loss DESC
 LIMIT $1
 OFFSET $2
 `
 
 type ListClaimsParams struct {
-	Limit            int32  `json:"limit"`
-	Offset           int32  `json:"offset"`
-	AdjusterAssigned string `json:"adjuster_assigned"`
-	Status           string `json:"status"`
-	PolicyNumber     string `json:"policy_number"`
+	Limit            int32       `json:"limit"`
+	Offset           int32       `json:"offset"`
+	AdjusterAssigned pgtype.Text `json:"adjuster_assigned"`
+	Status           pgtype.Text `json:"status"`
+	PolicyNumber     pgtype.Text `json:"policy_number"`
 }
 
 // backend/sql/apps/insurance/queries/insurance_queries.sql
+// Fetches a paginated and filtered list of insurance claims.
 func (q *Queries) ListClaims(ctx context.Context, arg ListClaimsParams) ([]VwInsuranceClaim, error) {
 	rows, err := q.db.Query(ctx, listClaims,
 		arg.Limit,
@@ -82,7 +84,7 @@ func (q *Queries) ListClaims(ctx context.Context, arg ListClaimsParams) ([]VwIns
 			&i.ItemType,
 			&i.ClaimID,
 			&i.PolicyNumber,
-			&i.Status,
+			&i.SystemStatus,
 			&i.Embedding,
 			&i.CreatedAt,
 			&i.UpdatedAt,
@@ -91,6 +93,7 @@ func (q *Queries) ListClaims(ctx context.Context, arg ListClaimsParams) ([]VwIns
 			&i.DateOfLoss,
 			&i.DescriptionOfLoss,
 			&i.ClaimAmount,
+			&i.BusinessStatus,
 			&i.AdjusterAssigned,
 		); err != nil {
 			return nil, err
@@ -107,22 +110,23 @@ const listPolicyholders = `-- name: ListPolicyholders :many
 SELECT id, item_type, policyholder_id, state, status, created_at, updated_at, policyholder_name, city, customer_since_date, customer_level, active_policies
 FROM vw_policyholders
 WHERE
-	($3::TEXT IS NULL OR state = $3)
+    state = COALESCE($3, state)
 AND
-	($4::TEXT IS NULL OR customer_level = $4)
+    customer_level = COALESCE($4, customer_level)
 ORDER BY
-	policyholder_name
+    policyholder_name
 LIMIT $1
 OFFSET $2
 `
 
 type ListPolicyholdersParams struct {
-	Limit         int32  `json:"limit"`
-	Offset        int32  `json:"offset"`
-	State         string `json:"state"`
-	CustomerLevel string `json:"customer_level"`
+	Limit         int32       `json:"limit"`
+	Offset        int32       `json:"offset"`
+	State         pgtype.Text `json:"state"`
+	CustomerLevel pgtype.Text `json:"customer_level"`
 }
 
+// Fetches a paginated and filtered list of policyholders.
 func (q *Queries) ListPolicyholders(ctx context.Context, arg ListPolicyholdersParams) ([]VwPolicyholder, error) {
 	rows, err := q.db.Query(ctx, listPolicyholders,
 		arg.Limit,

@@ -11,9 +11,12 @@ import (
 )
 
 type Querier interface {
-	GetPolicyholderBYID(ctx context.Context, policyholderID pgtype.Text) (VwPolicyholder, error)
+	// Fetches a single policyholder by their unique PolicyHolder_ID.
+	GetPolicyholderByID(ctx context.Context, policyholderID pgtype.Text) (VwPolicyholder, error)
 	// backend/sql/apps/insurance/queries/insurance_queries.sql
+	// Fetches a paginated and filtered list of insurance claims.
 	ListClaims(ctx context.Context, arg ListClaimsParams) ([]VwInsuranceClaim, error)
+	// Fetches a paginated and filtered list of policyholders.
 	ListPolicyholders(ctx context.Context, arg ListPolicyholdersParams) ([]VwPolicyholder, error)
 }
 

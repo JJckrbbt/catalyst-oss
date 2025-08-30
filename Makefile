@@ -1,4 +1,4 @@
-.PHONY: all up down logs build-backend run-backend migrate-up-platform migrate-down-platform migrate-up-demo migrate-down-demo migrate-up-all migrate-down-all install-frontend run-frontend db-reset
+.PHONY: all up down logs build-backend run-backend migrate-up-platform migrate-down-platform migrate-up-demo migrate-down-demo migrate-up-claims migrate-down-claims migrate-up-all migrate-down-all install-frontend run-frontend db-reset
 
 # ====================================================================================
 # VARIABLES
@@ -61,12 +61,25 @@ migrate-down-demo:
 	@echo "Rolling back last DEMO database migration..."
 	cd backend && go run github.com/pressly/goose/v3/cmd/goose -dir ./sql/apps/demo/migrations postgres "${DATABASE_URL}" down
 
+## migrate-up-demo: Applies all CLAIMS database migrations
+migrate-up-claims:
+	@echo "Running CLAIMS database migrations up..."
+	cd backend && go run github.com/pressly/goose/v3/cmd/goose -dir ./sql/apps/insurance/migrations postgres "${DATABASE_URL}" up
+
+## migrate-down-demo: Rolls back the last CLAIMS database migration
+migrate-down-claims:
+	@echo "Rolling back last CLAIMS database migration..."
+	cd backend && go run github.com/pressly/goose/v3/cmd/goose -dir ./sql/apps/insurance/migrations postgres "${DATABASE_URL}" down
+
+
 ## migrate-up-all: Applies ALL database migrations (platform then demo)
-migrate-up-all: migrate-up-platform migrate-up-demo
+migrate-up-all: migrate-up-platform migrate-up-demo migrate-up-claims
 	@echo "All migrations applied."
 
 ## migrate-down-all: Rolls back the last migration from ANY directory
 migrate-down-all:
+	@echo "Rolling back last CLAIMS migration (if any)..."
+	cd backend && go run github.com/pressly/goose/v3/cmd/goose -dir ./sql/apps/insurance/migrations postgres "${DATABASE_URL}" down || true
 	@echo "Rolling back last DEMO migration (if any)..."
 	cd backend && go run github.com/pressly/goose/v3/cmd/goose -dir ./sql/apps/demo/migrations postgres "${DATABASE_URL}" down || true
 	@echo "Rolling back last PLATFORM migration (if any)..."

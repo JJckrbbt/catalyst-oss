@@ -5,6 +5,7 @@ import { DashboardPage } from "./pages/DashboardPage";
 import { LandingPage } from "./pages/LandingPage";
 import { AboutPage } from './pages/AboutPage';
 import UploadsPage from './pages/UploadsPage';
+import ClaimsPage from './pages/ClaimsPage.tsx';
 
 function App() {
   const handleUploadSuccess = () => {};
@@ -23,6 +24,7 @@ function App() {
           <Route path="/dashboard" element={<DashboardPage />} />
           <Route path="/about" element={<AboutPage />} />
           <Route path="/uploads" element={<UploadsPage />} />
+          <Route path="/claims" element={<ClaimsPage />} />
         </Route>
       </Routes>
       <Toaster />

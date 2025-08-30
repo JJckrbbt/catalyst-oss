@@ -19,7 +19,7 @@ import (
 	"github.com/jjckrbbt/catalyst/backend/internal/processing"
 	"github.com/jjckrbbt/catalyst/backend/internal/repository"
 	"github.com/jjckrbbt/catalyst/backend/internal/apps/demo"
-	"github.com/jjckrbbt/catalyst-oss/backend/internal/apps/insurance"
+	"github.com/jjckrbbt/catalyst/backend/internal/apps/insurance"
 
 	"github.com/getsentry/sentry-go"
 	sentryecho "github.com/getsentry/sentry-go/echo"
@@ -224,6 +224,11 @@ func main() {
 
 	// RAG DEMO
 	apiGroup.POST("/demo/query", demoHandler.HandleHybridQuery)
+
+	//--- INSURANCE APP ROUTES ---
+	insuranceRoutes := apiGroup.Group("/insurance")
+	insuranceRoutes.GET("/claims", insuranceHandler.HandleListClaims)
+	insuranceRoutes.GET("/policyholders", insuranceHandler.HandleListPolicyholders)
 
 	//Upload Reporting Group
 //	uploadRoutes := apiGroup.Group("/uploads")

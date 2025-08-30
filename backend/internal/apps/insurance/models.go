@@ -257,7 +257,7 @@ type VwInsuranceClaim struct {
 	ItemType          ItemType           `json:"item_type"`
 	ClaimID           pgtype.Text        `json:"claim_id"`
 	PolicyNumber      pgtype.Text        `json:"policy_number"`
-	Status            ItemStatus         `json:"status"`
+	SystemStatus      ItemStatus         `json:"system_status"`
 	Embedding         pgvector.Vector    `json:"embedding"`
 	CreatedAt         pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
@@ -266,6 +266,7 @@ type VwInsuranceClaim struct {
 	DateOfLoss        pgtype.Date        `json:"date_of_loss"`
 	DescriptionOfLoss string             `json:"description_of_loss"`
 	ClaimAmount       pgtype.Numeric     `json:"claim_amount"`
+	BusinessStatus    string             `json:"business_status"`
 	AdjusterAssigned  string             `json:"adjuster_assigned"`
 }
 

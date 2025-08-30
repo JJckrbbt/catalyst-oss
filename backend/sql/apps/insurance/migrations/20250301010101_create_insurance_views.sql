@@ -32,7 +32,7 @@ SELECT
     item.item_type,
     item.business_key AS claim_id,
     item.scope AS policy_number,
-    item.status,
+    item.status AS system_status,
     item.embedding,
     item.created_at,
     item.updated_at,
@@ -43,6 +43,7 @@ SELECT
     (item.custom_properties->>'Date_of_Loss')::DATE AS date_of_loss,
     (item.custom_properties->>'Description_of_Loss')::TEXT AS description_of_loss,
     (item.custom_properties->>'Claim_Amount')::DECIMAL(12, 2) AS claim_amount,
+    (item.custom_properties->>'Status')::VARCHAR AS business_status,
     (item.custom_properties->>'Adjuster_Assigned')::VARCHAR AS adjuster_assigned
 FROM
     items AS item

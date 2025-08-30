@@ -1,8 +1,8 @@
 # /backend/configs/ingestion/insurance/internal_claims_guide.yaml
 
-report_type: "INTERNAL_CLAIMS_GUIDE"
+report_type: "CLAIM_HANDLING_PROTOCOL"
 item_type: "KNOWLEDGE_CHUNK"
-scope_field: "document_name"
+scope_field: "document name"
 business_key:
   - "metadata.document_id"
   - "metadata.chunk_number"
@@ -11,22 +11,22 @@ embed_content:
     - "chunked_text"
 
 column_mappings:
-  - csv_header: "chunked_text"
-    json_field: "chunk_text"
+  - csv_header: "chunked text"
+    json_field: "chunked_text"
     validation:
       required: true
 
-  - csv_header: "document_name"
+  - csv_header: "document name"
     json_field: "metadata.document_name"
     validation:
       required: true
 
-  - csv_header: "document"
+  - csv_header: "document id"
     json_field: "metadata.document_id"
     validation:
       required: true
 
-  - csv_header: "chunk_num"
+  - csv_header: "chunk number"
     json_field: "metadata.chunk_number"
     attempts:
       - transforms:
@@ -39,7 +39,7 @@ column_mappings:
     validation:
       required: false
 
-  - csv_header: "last_update"
+  - csv_header: "last updated"
     json_field: "metadata.last_update"
     attempts:
       - transforms:

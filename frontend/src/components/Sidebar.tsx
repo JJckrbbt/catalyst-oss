@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
-import { Bell, Home, LineChart, Settings, Upload, Gauge, BadgeInfo } from "lucide-react";
-import AppLogo from "";
+import { Bell, Home, LineChart, Settings, Upload, Gauge, BadgeInfo, FileText } from "lucide-react";
+import AppLogo from "@/assets/claimsflow.png";
 import { Link } from "react-router-dom";
 
 interface SidebarProps {
@@ -30,7 +30,13 @@ export function Sidebar({ onUploadReportClick }: SidebarProps) {
             Dashboard
           </Button>
         </Link>
-     </nav>
+        <Link to="/claims" className="w-full">
+          <Button variant="ghost" className="justify-start gap-2 w-full">
+            <FileText className="h-4 w-4" />
+            Claims
+          </Button>
+        </Link>
+      </nav>
 
       {/* Spacer to push admin link and upload button to the bottom */}
       <div className="mt-auto" />

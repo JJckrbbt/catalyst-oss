@@ -12,10 +12,11 @@ interface UploadReportModalProps {
 }
 
 const ALLOWED_REPORT_TYPES = [
-  "BC1300",
-  "BC1048",
-  "OUTSTANDING_BILLS",
-  "VENDOR_CODE",
+  "POLICYHOLDERS",
+  "CLAIMS",
+  "AUTO_POLICY_CHUNKS",
+  "HOMEOWNER_POLICY_CHUNKS",
+  "CLAIM_HANDLING_PROTOCOL",
 ];
 
 export function UploadReportModal({ onClose, onUploadSuccess }: UploadReportModalProps) {
