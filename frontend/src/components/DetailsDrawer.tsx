@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "@/components/ui/accordion";
 import { StatusHistory } from "./StatusHistory";
+import { Comments } from "@/components/claims/Comments";
 import React, { useState, useEffect } from "react";
 
 interface Field<TData> {
@@ -120,17 +121,13 @@ export function DetailsDrawer<TData extends object>({ data, fields, onSave, onCa
           <AccordionItem value="comments">
             <AccordionTrigger>Comments</AccordionTrigger>
             <AccordionContent>
-              {fields.comments.map((field) => (
-                <p key={String(field.key)}>
-                  <strong>{field.label}:</strong> {renderValue(data[field.key])}
-                </p>
-              ))}
+              {id && <Comments itemId={id} />}
             </AccordionContent>
           </AccordionItem>
           <AccordionItem value="status-history">
             <AccordionTrigger>Status History</AccordionTrigger>
             <AccordionContent>
-              {id && type && <StatusHistory id={id} type={type} />}
+              {id && type && <StatusHistory id={id} type="items" />}
             </AccordionContent>
           </AccordionItem>
         </Accordion>

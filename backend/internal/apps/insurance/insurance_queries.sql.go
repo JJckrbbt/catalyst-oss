@@ -11,6 +11,136 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const getClaimDetails = `-- name: GetClaimDetails :one
+SELECT
+    c.id,
+    c.item_type,
+    c.claim_id,
+    c.policy_number,
+    c.system_status,
+    c.created_at,
+    c.updated_at,
+    c.policyholder_id,
+    c.claim_type,
+    c.date_of_loss,
+    c.description_of_loss,
+    c.claim_amount,
+    c.business_status,
+    c.adjuster_assigned,
+    p.policyholder_name,
+    p.city,
+    p.state,
+    p.customer_since_date,
+    p.customer_level
+FROM
+    vw_insurance_claims c
+JOIN
+    vw_policyholders p ON c.policyholder_id = p.policyholder_id
+WHERE
+    c.id = $1
+`
+
+type GetClaimDetailsRow struct {
+	ID                int64              `json:"id"`
+	ItemType          ItemType           `json:"item_type"`
+	ClaimID           pgtype.Text        `json:"claim_id"`
+	PolicyNumber      pgtype.Text        `json:"policy_number"`
+	SystemStatus      ItemStatus         `json:"system_status"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	PolicyholderID    string             `json:"policyholder_id"`
+	ClaimType         string             `json:"claim_type"`
+	DateOfLoss        pgtype.Date        `json:"date_of_loss"`
+	DescriptionOfLoss string             `json:"description_of_loss"`
+	ClaimAmount       pgtype.Numeric     `json:"claim_amount"`
+	BusinessStatus    string             `json:"business_status"`
+	AdjusterAssigned  string             `json:"adjuster_assigned"`
+	PolicyholderName  string             `json:"policyholder_name"`
+	City              string             `json:"city"`
+	State             pgtype.Text        `json:"state"`
+	CustomerSinceDate pgtype.Date        `json:"customer_since_date"`
+	CustomerLevel     string             `json:"customer_level"`
+}
+
+// Fetches a single claim joined with its correspondng policyholder data
+func (q *Queries) GetClaimDetails(ctx context.Context, id int64) (GetClaimDetailsRow, error) {
+	row := q.db.QueryRow(ctx, getClaimDetails, id)
+	var i GetClaimDetailsRow
+	err := row.Scan(
+		&i.ID,
+		&i.ItemType,
+		&i.ClaimID,
+		&i.PolicyNumber,
+		&i.SystemStatus,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+		&i.PolicyholderID,
+		&i.ClaimType,
+		&i.DateOfLoss,
+		&i.DescriptionOfLoss,
+		&i.ClaimAmount,
+		&i.BusinessStatus,
+		&i.AdjusterAssigned,
+		&i.PolicyholderName,
+		&i.City,
+		&i.State,
+		&i.CustomerSinceDate,
+		&i.CustomerLevel,
+	)
+	return i, err
+}
+
+const getClaimStatusHistory = `-- name: GetClaimStatusHistory :many
+SELECT
+    ie.id AS event_id,
+    ie.created_at AS event_timestamp,
+    ie.event_data, 
+    u.display_name AS user_name
+FROM
+    items_events ie
+JOIN
+    users u ON ie.created_by = u.id
+WHERE
+    ie.item_id = $1
+AND
+    ie.event_type = 'CLAIM_STATUS_CHANGED'
+ORDER BY
+    ie.created_at DESC
+`
+
+type GetClaimStatusHistoryRow struct {
+	EventID        int64              `json:"event_id"`
+	EventTimestamp pgtype.Timestamptz `json:"event_timestamp"`
+	EventData      []byte             `json:"event_data"`
+	UserName       pgtype.Text        `json:"user_name"`
+}
+
+// Fetches the business status change history for a specific claim item
+func (q *Queries) GetClaimStatusHistory(ctx context.Context, itemID int64) ([]GetClaimStatusHistoryRow, error) {
+	rows, err := q.db.Query(ctx, getClaimStatusHistory, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []GetClaimStatusHistoryRow
+	for rows.Next() {
+		var i GetClaimStatusHistoryRow
+		if err := rows.Scan(
+			&i.EventID,
+			&i.EventTimestamp,
+			&i.EventData,
+			&i.UserName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const getPolicyholderByID = `-- name: GetPolicyholderByID :one
 SELECT id, item_type, policyholder_id, state, status, created_at, updated_at, policyholder_name, city, customer_since_date, customer_level, active_policies
 FROM vw_policyholders
@@ -40,7 +170,21 @@ func (q *Queries) GetPolicyholderByID(ctx context.Context, policyholderID pgtype
 
 const listClaims = `-- name: ListClaims :many
 
-SELECT id, item_type, claim_id, policy_number, system_status, embedding, created_at, updated_at, policyholder_id, claim_type, date_of_loss, description_of_loss, claim_amount, business_status, adjuster_assigned
+SELECT 
+    id,
+    item_type,
+    claim_id,
+    policy_number,
+    system_status,
+    created_at,
+    updated_at,
+    policyholder_id,
+    claim_type,
+    date_of_loss,
+    description_of_loss,
+    claim_amount,
+    business_status,
+    adjuster_assigned
 FROM vw_insurance_claims
 WHERE
     adjuster_assigned = COALESCE($3, adjuster_assigned)
@@ -62,9 +206,26 @@ type ListClaimsParams struct {
 	PolicyNumber     pgtype.Text `json:"policy_number"`
 }
 
+type ListClaimsRow struct {
+	ID                int64              `json:"id"`
+	ItemType          ItemType           `json:"item_type"`
+	ClaimID           pgtype.Text        `json:"claim_id"`
+	PolicyNumber      pgtype.Text        `json:"policy_number"`
+	SystemStatus      ItemStatus         `json:"system_status"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	PolicyholderID    string             `json:"policyholder_id"`
+	ClaimType         string             `json:"claim_type"`
+	DateOfLoss        pgtype.Date        `json:"date_of_loss"`
+	DescriptionOfLoss string             `json:"description_of_loss"`
+	ClaimAmount       pgtype.Numeric     `json:"claim_amount"`
+	BusinessStatus    string             `json:"business_status"`
+	AdjusterAssigned  string             `json:"adjuster_assigned"`
+}
+
 // backend/sql/apps/insurance/queries/insurance_queries.sql
 // Fetches a paginated and filtered list of insurance claims.
-func (q *Queries) ListClaims(ctx context.Context, arg ListClaimsParams) ([]VwInsuranceClaim, error) {
+func (q *Queries) ListClaims(ctx context.Context, arg ListClaimsParams) ([]ListClaimsRow, error) {
 	rows, err := q.db.Query(ctx, listClaims,
 		arg.Limit,
 		arg.Offset,
@@ -76,16 +237,15 @@ func (q *Queries) ListClaims(ctx context.Context, arg ListClaimsParams) ([]VwIns
 		return nil, err
 	}
 	defer rows.Close()
-	var items []VwInsuranceClaim
+	var items []ListClaimsRow
 	for rows.Next() {
-		var i VwInsuranceClaim
+		var i ListClaimsRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ItemType,
 			&i.ClaimID,
 			&i.PolicyNumber,
 			&i.SystemStatus,
-			&i.Embedding,
 			&i.CreatedAt,
 			&i.UpdatedAt,
 			&i.PolicyholderID,

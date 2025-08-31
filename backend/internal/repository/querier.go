@@ -9,10 +9,12 @@ import (
 )
 
 type Querier interface {
+	AddMentionToComment(ctx context.Context, arg AddMentionToCommentParams) error
 	// Assign a specific role to a user
 	AssignRoleToUser(ctx context.Context, arg AssignRoleToUserParams) error
 	// Grants a user access to a specific scope
 	AssignScopeToUser(ctx context.Context, arg AssignScopeToUserParams) error
+	CreateComment(ctx context.Context, arg CreateCommentParams) (CreateCommentRow, error)
 	// Inserts a new ingestion error record for a row that failed processing.
 	CreateIngestionError(ctx context.Context, arg CreateIngestionErrorParams) (IngestionError, error)
 	// Inserts a new file ingestion job record.
@@ -20,6 +22,8 @@ type Querier interface {
 	// Inserts a new item record into database
 	// Go is responsible for constructing the custom_properties JSONB
 	CreateItem(ctx context.Context, arg CreateItemParams) (Item, error)
+	// Inserts a new event record for a specific time
+	CreateItemEvent(ctx context.Context, arg CreateItemEventParams) (ItemsEvent, error)
 	// Creates a temporary table for staging items during ingest
 	// This table is dropped on commit
 	CreateTempItemsStagingTable(ctx context.Context) error
@@ -34,6 +38,7 @@ type Querier interface {
 	GetUserByAuthProviderSubject(ctx context.Context, authProviderSubject string) (User, error)
 	// Checks for the existence of an item by its type and business key. Returns 1 if it exists, 0 otherwise.
 	ItemExistsByBusinessKey(ctx context.Context, arg ItemExistsByBusinessKeyParams) (int32, error)
+	ListCommentsForItem(ctx context.Context, itemID int64) ([]ListCommentsForItemRow, error)
 	// Fetch all available roles in system
 	ListRoles(ctx context.Context) ([]Role, error)
 	// Removes all roles from a user. Useful when completely re-assigning roles
@@ -44,6 +49,8 @@ type Querier interface {
 	RemoveRoleFromUser(ctx context.Context, arg RemoveRoleFromUserParams) error
 	//Revokes a user's access from a specific scope.
 	RemoveScopeFromUser(ctx context.Context, arg RemoveScopeFromUserParams) error
+	// Sets the embedding for a specific comment after its been created
+	SetCommentEmbedding(ctx context.Context, arg SetCommentEmbeddingParams) error
 	// Updates only the is_admin status of a specific user
 	// This is a priviliged action and should be protected at API layer
 	SetUserAdminStatus(ctx context.Context, arg SetUserAdminStatusParams) (User, error)

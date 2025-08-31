@@ -34,14 +34,6 @@ type HybridContext struct {
 	KnowledgeChunks []demo.FindSimilarMissionKnowledgeRow
 }
 
-type EmbeddingRequest struct {
-	Text string `json:"text"`
-}
-
-type EmbeddingResponse struct {
-	Embedding []float32 `json:"embedding"`
-}
-
 type LLMRequestBody struct {
 	Model          string          `json:"model"`
 	Messages       []Message       `json:"messages"`

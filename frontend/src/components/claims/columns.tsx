@@ -3,6 +3,7 @@
 import { ColumnDef } from "@tanstack/react-table";
 import { DataTableColumnHeader } from "@/components/ui/DataTableColumnHeader";
 import { formatCurrency } from "@/lib/utils";
+import { StatusBadge } from "./StatusBadge";
 
 export type Claim = {
   id: number;
@@ -34,6 +35,10 @@ export const columns: ColumnDef<Claim>[] = [
     header: ({ column }) => (
       <DataTableColumnHeader column={column} title="Status" />
     ),
+    cell: ({ row }) => {
+      const status = row.getValue("business_status") as string;
+      return <StatusBadge status={status} />;
+    },
   },
   {
     accessorKey: "claim_amount",

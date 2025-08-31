@@ -1,16 +1,17 @@
+// frontend/src/components/StatusHistory.tsx
+
 import { useState, useEffect } from 'react';
 import { useAuth0 } from '@auth0/auth0-react';
 import { apiClient } from '@/lib/api';
 
-interface StatusHistoryEntry {
-  status_history_id: number;
-  status: string;
-  status_date: string;
-  notes: string;
-  user_id: number;
-  user_first_name: string;
-  user_last_name: string;
-  user_email: string;
+interface StatusHistoryEvent {
+  ID: number;
+  event_timestamp: string;
+  event_data: {
+    old_status: string;
+    new_status: string;
+  };
+  user_name: string;
 }
 
 interface StatusHistoryProps {
@@ -18,23 +19,21 @@ interface StatusHistoryProps {
   type: 'items';
 }
 
-export function StatusHistory({ id, type }: StatusHistoryProps) {
-  const [history, setHistory] = useState<StatusHistoryEntry[]>([]);
+export function StatusHistory({ id }: StatusHistoryProps) {
+  const [history, setHistory] = useState<StatusHistoryEvent[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const { getAccessTokenSilently, isAuthenticated } = useAuth0();
 
   useEffect(() => {
     const fetchHistory = async () => {
+      if (!id) return;
+      
       try {
         setIsLoading(true);
-        const token = await getAccessTokenSilently({
-          authorizationParams: {
-            audience: import.meta.env.VITE_AUTH0_AUDIENCE,
-          },
-        });
-        const url = `/api/items/history/${id}`;
+        const token = await getAccessTokenSilently();
+        const url = `/api/insurance/claims/${id}/history`; 
         const data = await apiClient.get(url, token);
-        setHistory(data);
+        setHistory(data || []);
       } catch (error) {
         console.error('StatusHistory: Failed to fetch status history:', error);
       } finally {
@@ -45,24 +44,26 @@ export function StatusHistory({ id, type }: StatusHistoryProps) {
     if (id && isAuthenticated) {
       fetchHistory();
     }
-  }, [id, type, isAuthenticated, getAccessTokenSilently]);
+  }, [id, isAuthenticated, getAccessTokenSilently]);
 
   if (isLoading) {
-    return <p>Loading status history...</p>;
+    return <p className="text-sm text-muted-foreground">Loading history...</p>;
   }
 
   if (!history || history.length === 0) {
-    return <p>No status history available.</p>;
+    return <p className="text-sm text-muted-foreground">No status history available for this claim.</p>;
   }
 
   return (
     <div className="space-y-4">
-      {history.map((entry) => (
-        <div key={entry.status_history_id} className="p-2 border rounded-md">
-          <p><strong>Status:</strong> {entry.status}</p>
-          <p><strong>Date:</strong> {new Date(entry.status_date).toLocaleString()}</p>
-          <p><strong>User:</strong> {entry.user_first_name} {entry.user_last_name} ({entry.user_email})</p>
-          <p><strong>Notes:</strong> {entry.notes}</p>
+      {history.map((event) => (
+        <div key={event.ID} className="p-3 border rounded-md text-sm">
+          <p>
+            Status changed from <strong>{event.event_data.old_status || 'N/A'}</strong> to <strong>{event.event_data.new_status}</strong>
+          </p>
+          <p className="text-sm text-muted-foreground">
+            by {event.user_name} on {new Date(event.event_timestamp).toLocaleString()}
+          </p>
         </div>
       ))}
     </div>

@@ -2,13 +2,14 @@
 package main
 
 import (
-	"context" // Required for context.Background() in Echo's logger setup
+	"context"
 	"fmt"
 	"io"
-	"log/slog" // For slog types
-	"net/http" // Still needed for http.StatusX, etc.
-	"os"       // For os.Exit, os.Stderr
+	"log/slog"
+	"net/http"
+	"os"
 	"time"
+	"runtime/debug"
 
 	"cloud.google.com/go/storage"
 	"github.com/jjckrbbt/catalyst/backend/internal/api"
@@ -27,6 +28,28 @@ import (
 	"github.com/labstack/echo/v4"
 	"github.com/labstack/echo/v4/middleware"
 )
+
+func slogPanicRecoverMiddleware(logger *slog.Logger) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			defer func() {
+				if r := recover(); r != nil {
+					err, ok := r.(error)
+					if !ok {
+						err = fmt.Errorf("%v", r)
+					}
+					reqLogger := logger.With("request_id", c.Get("request_id"))
+					reqLogger.ErrorContext(c.Request().Context(), "PANIC recovered",
+						slog.Any("error", err),
+						slog.String("stack", string(debug.Stack())),
+					)
+					c.Error(err)
+				}
+			}()
+			return next(c)
+		}
+	}
+}
 
 func main() {
 	// 1. Load application configuration FIRST.
@@ -107,7 +130,7 @@ func main() {
 	}
 
 	uploadHandler := api.NewUploadHandler(ingestionService, processingService, demoHandler, configLoader, apiLogger)
-	insuranceHandler := api.NewInsuranceHandler(insuranceQuerier, apiLogger)
+	insuranceHandler := api.NewInsuranceHandler(insuranceQuerier, platformQuerier, apiLogger)
 	
 	appLogger.Info("API handlers initialized.")
 
@@ -121,7 +144,7 @@ func main() {
 
 	// 7. Register Middleware.
 	// Recover middleware: Recovers from panics anywhere in the chain and handles the error.
-	e.Use(middleware.Recover())
+	e.Use(slogPanicRecoverMiddleware(appLogger))
 	// CORS middleware
 	e.Use(middleware.CORSWithConfig(middleware.CORSConfig{
 		AllowOrigins: []string{"http://localhost:5173"}, // Replace with your React dev server URL
@@ -228,6 +251,11 @@ func main() {
 	//--- INSURANCE APP ROUTES ---
 	insuranceRoutes := apiGroup.Group("/insurance")
 	insuranceRoutes.GET("/claims", insuranceHandler.HandleListClaims)
+	insuranceRoutes.GET("/claims/:id", insuranceHandler.HandleGetClaimDetails)
+	insuranceRoutes.GET("/claims/:id/history", insuranceHandler.HandleGetClaimStatusHistory)
+	insuranceRoutes.PATCH("/claims/:id", insuranceHandler.HandleUpdateClaim)
+	insuranceRoutes.GET("/claims/:id/comments", insuranceHandler.HandleListComments)
+	insuranceRoutes.POST("/claims/:id/comments", insuranceHandler.HandleCreateComment)
 	insuranceRoutes.GET("/policyholders", insuranceHandler.HandleListPolicyholders)
 
 	//Upload Reporting Group

@@ -45,3 +45,34 @@ RETURNING *;
 -- Creates a temporary table for staging items during ingest
 -- This table is dropped on commit
 CREATE TEMP TABLE temp_items_staging (LIKE items INCLUDING DEFAULTS) ON COMMIT DROP;
+
+-- name: CreateItemEvent :one
+-- Inserts a new event record for a specific time
+INSERT INTO items_events (
+	item_id,
+	event_type,
+	event_data,
+	created_by
+) VALUES (
+	$1, $2, $3, $4
+)
+RETURNING *;
+
+-- name: CreateComment :one
+INSERT INTO comments (
+	item_id,
+	comment,
+	user_id
+) VALUES (
+	$1, $2, $3
+)
+RETURNING id, item_id, comment, user_id, created_at, updated_at;
+
+
+-- name: AddMentionToComment :exec
+INSERT INTO comment_mentions (
+	comment_id,
+	user_id
+) VALUES (
+	$1, $2
+) ON CONFLICT DO NOTHING;

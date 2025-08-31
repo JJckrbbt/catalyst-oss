@@ -117,9 +117,9 @@ export function DataTable<TData, TValue>({
           </DropdownMenuContent>
         </DropdownMenu>
       </div>
-      <div className="flex-1 min-h-0 overflow-y-auto rounded-md border" style={{ maxHeight: '60vh' }}>
+      <div className="flex-1 min-h-0 overflow-y-auto rounded-md border">
         <Table>
-          <TableHeader className="sticky top-0 bg-background z-10">
+          <TableHeader className="sticky top-0 bg-background/95 backdrop-blur-sm z-10">
             {table.getHeaderGroups().map((headerGroup) => (
               <TableRow key={headerGroup.id}>
                 {headerGroup.headers.map((header) => {
@@ -163,7 +163,7 @@ export function DataTable<TData, TValue>({
           </TableBody>
         </Table>
       </div>
-      <div className="flex items-center justify-end space-x-2 py-4 px-6 border-t bg-background sticky bottom-0 z-20">
+      <div className="flex items-center justify-end space-x-2 py-4 px-6 border-t bg-background/80 backdrop-blur-sm sticky bottom-0 z-20">
         <Button
           variant="outline"
           size="sm"

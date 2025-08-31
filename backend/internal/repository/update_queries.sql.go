@@ -9,7 +9,27 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
+
+const setCommentEmbedding = `-- name: SetCommentEmbedding :exec
+UPDATE comments
+SET
+	embedding = $2
+WHERE
+	id = $1
+`
+
+type SetCommentEmbeddingParams struct {
+	ID        int64           `json:"id"`
+	Embedding pgvector.Vector `json:"embedding"`
+}
+
+// Sets the embedding for a specific comment after its been created
+func (q *Queries) SetCommentEmbedding(ctx context.Context, arg SetCommentEmbeddingParams) error {
+	_, err := q.db.Exec(ctx, setCommentEmbedding, arg.ID, arg.Embedding)
+	return err
+}
 
 const updateIngestionJobStatus = `-- name: UpdateIngestionJobStatus :exec
 UPDATE ingestion_jobs

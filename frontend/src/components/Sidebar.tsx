@@ -1,6 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { Bell, Home, LineChart, Settings, Upload, Gauge, BadgeInfo, FileText } from "lucide-react";
-import AppLogo from "@/assets/claimsflow.png";
+import AppLogo from "@/assets/catalyst.png";
 import { Link } from "react-router-dom";
 
 interface SidebarProps {

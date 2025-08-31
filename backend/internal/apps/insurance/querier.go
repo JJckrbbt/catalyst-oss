@@ -11,11 +11,15 @@ import (
 )
 
 type Querier interface {
+	// Fetches a single claim joined with its correspondng policyholder data
+	GetClaimDetails(ctx context.Context, id int64) (GetClaimDetailsRow, error)
+	// Fetches the business status change history for a specific claim item
+	GetClaimStatusHistory(ctx context.Context, itemID int64) ([]GetClaimStatusHistoryRow, error)
 	// Fetches a single policyholder by their unique PolicyHolder_ID.
 	GetPolicyholderByID(ctx context.Context, policyholderID pgtype.Text) (VwPolicyholder, error)
 	// backend/sql/apps/insurance/queries/insurance_queries.sql
 	// Fetches a paginated and filtered list of insurance claims.
-	ListClaims(ctx context.Context, arg ListClaimsParams) ([]VwInsuranceClaim, error)
+	ListClaims(ctx context.Context, arg ListClaimsParams) ([]ListClaimsRow, error)
 	// Fetches a paginated and filtered list of policyholders.
 	ListPolicyholders(ctx context.Context, arg ListPolicyholdersParams) ([]VwPolicyholder, error)
 }

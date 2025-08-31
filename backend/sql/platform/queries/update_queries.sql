@@ -31,3 +31,13 @@ SET
 	rows_triaged = $5
 WHERE
 	id = $1;
+
+-- name: SetCommentEmbedding :exec
+-- Sets the embedding for a specific comment after its been created
+UPDATE comments
+SET
+	embedding = $2
+WHERE
+	id = $1;
+
+

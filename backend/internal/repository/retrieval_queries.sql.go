@@ -7,6 +7,8 @@ package repository
 
 import (
 	"context"
+
+	"github.com/jackc/pgx/v5/pgtype"
 )
 
 const getEventsForItem = `-- name: GetEventsForItem :many
@@ -85,4 +87,61 @@ func (q *Queries) GetUserByAuthProviderSubject(ctx context.Context, authProvider
 		&i.CreatedAt,
 	)
 	return i, err
+}
+
+const listCommentsForItem = `-- name: ListCommentsForItem :many
+SELECT
+	c.id,
+	c.comment,
+	c.created_at,
+	u.display_name,
+	-- Aggregate mentioned user IDs and names into JSON array
+	(
+		SELECT COALESCE(json_agg(json_build_object('user_id', mu.id, 'display_name', mu.display_name)), '[]')
+		FROM comment_mentions cm
+		JOIN users mu ON cm.user_id = mu.id
+		WHERE cm.comment_id = c.id
+	) AS mentioned_users
+FROM
+	comments c
+JOIN
+	users u ON c.user_id = u.id
+WHERE
+	c.item_id = $1
+ORDER BY
+	c.created_at ASC
+`
+
+type ListCommentsForItemRow struct {
+	ID             int64              `json:"id"`
+	Comment        string             `json:"comment"`
+	CreatedAt      pgtype.Timestamptz `json:"created_at"`
+	DisplayName    pgtype.Text        `json:"display_name"`
+	MentionedUsers interface{}        `json:"mentioned_users"`
+}
+
+func (q *Queries) ListCommentsForItem(ctx context.Context, itemID int64) ([]ListCommentsForItemRow, error) {
+	rows, err := q.db.Query(ctx, listCommentsForItem, itemID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListCommentsForItemRow
+	for rows.Next() {
+		var i ListCommentsForItemRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Comment,
+			&i.CreatedAt,
+			&i.DisplayName,
+			&i.MentionedUsers,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }

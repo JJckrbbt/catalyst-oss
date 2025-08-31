@@ -12,6 +12,65 @@ import (
 	"github.com/pgvector/pgvector-go"
 )
 
+const addMentionToComment = `-- name: AddMentionToComment :exec
+INSERT INTO comment_mentions (
+	comment_id,
+	user_id
+) VALUES (
+	$1, $2
+) ON CONFLICT DO NOTHING
+`
+
+type AddMentionToCommentParams struct {
+	CommentID int64 `json:"comment_id"`
+	UserID    int64 `json:"user_id"`
+}
+
+func (q *Queries) AddMentionToComment(ctx context.Context, arg AddMentionToCommentParams) error {
+	_, err := q.db.Exec(ctx, addMentionToComment, arg.CommentID, arg.UserID)
+	return err
+}
+
+const createComment = `-- name: CreateComment :one
+INSERT INTO comments (
+	item_id,
+	comment,
+	user_id
+) VALUES (
+	$1, $2, $3
+)
+RETURNING id, item_id, comment, user_id, created_at, updated_at
+`
+
+type CreateCommentParams struct {
+	ItemID  int64  `json:"item_id"`
+	Comment string `json:"comment"`
+	UserID  int64  `json:"user_id"`
+}
+
+type CreateCommentRow struct {
+	ID        int64              `json:"id"`
+	ItemID    int64              `json:"item_id"`
+	Comment   string             `json:"comment"`
+	UserID    int64              `json:"user_id"`
+	CreatedAt pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+}
+
+func (q *Queries) CreateComment(ctx context.Context, arg CreateCommentParams) (CreateCommentRow, error) {
+	row := q.db.QueryRow(ctx, createComment, arg.ItemID, arg.Comment, arg.UserID)
+	var i CreateCommentRow
+	err := row.Scan(
+		&i.ID,
+		&i.ItemID,
+		&i.Comment,
+		&i.UserID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createIngestionJob = `-- name: CreateIngestionJob :one
 INSERT INTO ingestion_jobs (
 	id, 
@@ -111,6 +170,45 @@ func (q *Queries) CreateItem(ctx context.Context, arg CreateItemParams) (Item, e
 		&i.Embedding,
 		&i.CreatedAt,
 		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createItemEvent = `-- name: CreateItemEvent :one
+INSERT INTO items_events (
+	item_id,
+	event_type,
+	event_data,
+	created_by
+) VALUES (
+	$1, $2, $3, $4
+)
+RETURNING id, item_id, event_type, event_data, created_by, created_at
+`
+
+type CreateItemEventParams struct {
+	ItemID    int64  `json:"item_id"`
+	EventType string `json:"event_type"`
+	EventData []byte `json:"event_data"`
+	CreatedBy int64  `json:"created_by"`
+}
+
+// Inserts a new event record for a specific time
+func (q *Queries) CreateItemEvent(ctx context.Context, arg CreateItemEventParams) (ItemsEvent, error) {
+	row := q.db.QueryRow(ctx, createItemEvent,
+		arg.ItemID,
+		arg.EventType,
+		arg.EventData,
+		arg.CreatedBy,
+	)
+	var i ItemsEvent
+	err := row.Scan(
+		&i.ID,
+		&i.ItemID,
+		&i.EventType,
+		&i.EventData,
+		&i.CreatedBy,
+		&i.CreatedAt,
 	)
 	return i, err
 }

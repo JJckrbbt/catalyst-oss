@@ -25,14 +25,8 @@ export function DashboardLayout({ children, onUploadSuccess }: DashboardLayoutPr
   };
 
   return (
-    <div className="h-screen flex">
-      {/* Persistent Sidebar for Desktop */}
-      <div className="hidden md:block fixed top-0 left-0 h-full w-[280px] border-r bg-muted/40">
-        <Sidebar onUploadReportClick={handleUploadReportClick} />
-      </div>
-
-      <div className="flex flex-col flex-1 md:ml-[280px]">
-        <header className="flex h-16 items-center justify-between border-b bg-background px-6 sticky top-0 z-10">
+    <div className="h-screen flex flex-col bg-transparent">
+      <header className="flex h-16 items-center justify-between border-b bg-transparent px-6 sticky top-0 z-10">
           {/* Mobile Navigation */}
           <Sheet open={isMobileMenuOpen} onOpenChange={setIsMobileMenuOpen}>
             <SheetTrigger asChild>
@@ -61,12 +55,18 @@ export function DashboardLayout({ children, onUploadSuccess }: DashboardLayoutPr
             <AuthenticationButton />
           </div>
         </header>
-
-        <main className="flex-1 flex flex-col overflow-y-auto">
-          <div className="p-6 h-full">
-            {children}
+        <div className="flex-1 flex flex-row min-h-0">
+          <div className="hidden:block w-[280px] border-r bg-background/50 dark:bg-black/20 backdrop-blur-lg flex-shrink-0">
+            <Sidebar onUploadReportClick={handleUploadReportClick} />
           </div>
-        </main>
+
+          <main className="flex-1 overflow-y-auto p-6">
+            <div className="p-6 h-full">
+              {children}
+            </div>
+          </main>
+        </div>
+
         <Sheet open={isUploadModalOpen} onOpenChange={setIsUploadModalOpen}>
               <SheetContent side="bottom" className="w-[280px]">
                 <SheetHeader>
@@ -80,6 +80,5 @@ export function DashboardLayout({ children, onUploadSuccess }: DashboardLayoutPr
             </Sheet>
       </div>
       
-    </div>
   );
 }

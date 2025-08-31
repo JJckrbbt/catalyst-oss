@@ -127,6 +127,7 @@ type Comment struct {
 	UserID    int64              `json:"user_id"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
 	UpdatedAt pgtype.Timestamptz `json:"updated_at"`
+	Embedding pgvector.Vector    `json:"embedding"`
 }
 
 type CommentMention struct {
@@ -203,6 +204,16 @@ type ItemsEvent struct {
 	EventData []byte             `json:"event_data"`
 	CreatedBy int64              `json:"created_by"`
 	CreatedAt pgtype.Timestamptz `json:"created_at"`
+}
+
+type Notification struct {
+	ID               int64              `json:"id"`
+	UserID           int64              `json:"user_id"`
+	NotificationType string             `json:"notification_type"`
+	SourceItemID     pgtype.Int8        `json:"source_item_id"`
+	SourceCommentID  pgtype.Int8        `json:"source_comment_id"`
+	IsRead           bool               `json:"is_read"`
+	CreatedAt        pgtype.Timestamptz `json:"created_at"`
 }
 
 type Permission struct {
