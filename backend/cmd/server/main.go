@@ -130,7 +130,11 @@ func main() {
 	}
 
 	uploadHandler := api.NewUploadHandler(ingestionService, processingService, demoHandler, configLoader, apiLogger)
-	insuranceHandler := api.NewInsuranceHandler(insuranceQuerier, platformQuerier, apiLogger)
+	insuranceHandler, err := api.NewInsuranceHandler(insuranceQuerier, platformQuerier, cfg.OpenAIAPIKey, apiLogger)
+	if err != nil {
+		appLogger.Error("Failed to initialize insurance handler", "error", err)
+		os.Exit(1)
+	}
 	
 	appLogger.Info("API handlers initialized.")
 
@@ -250,6 +254,7 @@ func main() {
 
 	//--- INSURANCE APP ROUTES ---
 	insuranceRoutes := apiGroup.Group("/insurance")
+	insuranceRoutes.POST("/query", insuranceHandler.HandleInsuranceQuery)
 	insuranceRoutes.GET("/claims", insuranceHandler.HandleListClaims)
 	insuranceRoutes.GET("/claims/:id", insuranceHandler.HandleGetClaimDetails)
 	insuranceRoutes.GET("/claims/:id/history", insuranceHandler.HandleGetClaimStatusHistory)
@@ -257,6 +262,7 @@ func main() {
 	insuranceRoutes.GET("/claims/:id/comments", insuranceHandler.HandleListComments)
 	insuranceRoutes.POST("/claims/:id/comments", insuranceHandler.HandleCreateComment)
 	insuranceRoutes.GET("/policyholders", insuranceHandler.HandleListPolicyholders)
+	
 
 	//Upload Reporting Group
 //	uploadRoutes := apiGroup.Group("/uploads")

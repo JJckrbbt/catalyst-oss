@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"encoding/json"
 	"strings"
+	"text/template"
 	"strconv"
 	"time"
 	"fmt"
@@ -34,7 +35,22 @@ type ToolCall struct {
 
 type InsuranceContext struct {
 	ClaimsData		[]insurance.ListClaimsRow
-	KnowledgeChunks		[]insurance.SearchInsuranceContextRow
+	KnowledgeChunks		[]SearchResult
+}
+
+type SynthesizerTemplateData struct {
+	UserQuestion	string
+	ClaimsData	[]insurance.ListClaimsRow
+	KnowledgeChunks	[]SearchResult
+}
+
+type Action struct {
+	Type	string		`json:"type"`
+	Payload	interface{}	`json:"payload"`
+}
+
+type QueryApiResponse struct {
+	Actions []Action `json:"actions"`
 }
 
 type LLMRequestBody struct {
@@ -95,7 +111,7 @@ type EmbeddingResponse struct {
 }
 
 // NewInsuranceHandler creates a new instance of the InsuranceHandler.
-func NewInsuranceHandler(q *insurance.Queries, pq repository.Querier, apiKey string, logger *slog.Logger) *InsuranceHandler {
+func NewInsuranceHandler(q *insurance.Queries, pq repository.Querier, apiKey string, logger *slog.Logger) (*InsuranceHandler, error) {
 	plannerTmpl, err := template.ParseFiles("backend/configs/prompts/apps/insurance/insurance_planner_prompt.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse insuance planner template: %w", err)
@@ -115,12 +131,13 @@ func NewInsuranceHandler(q *insurance.Queries, pq repository.Querier, apiKey str
 		synthesizerTemplate:	synthesizerTmpl,
 		openAIAPIKey:		apiKey,
 		logger:  logger.With("component", "insurance_handler"),
-	}
+	}, nil
 }
 
 // HandleListClaims retrieves a paginated and filtered list of insurance claims.
 func (h *InsuranceHandler) HandleListClaims(c echo.Context) error {
 	ctx := c.Request().Context()
+	reqLogger := h.logger.With("request_id", c.Get("requestID"))
 
 	// --- Parse Pagination and Filtering Parameters ---
 	limit, _ := strconv.ParseInt(c.QueryParam("limit"), 10, 32)
@@ -142,6 +159,22 @@ func (h *InsuranceHandler) HandleListClaims(c echo.Context) error {
 		AdjusterAssigned: pgtype.Text{String: c.QueryParam("adjuster_assigned"), Valid: c.QueryParam("adjuster_assigned") != ""},
 		Status:           pgtype.Text{String: c.QueryParam("status"), Valid: c.QueryParam("status") != ""},
 		PolicyNumber:     pgtype.Text{String: c.QueryParam("policy_number"), Valid: c.QueryParam("policy_number") != ""},
+		SortBy:		  c.QueryParam("sort_by"),
+		SortDirection:	  c.QueryParam("sort_direction"),
+	}
+
+	// --- Semantic Search Logic ---
+	searchQuery := c.QueryParam("semantic_search_query")
+	if searchQuery != "" {
+		reqLogger.InfoContext(ctx, "Performing semantic search on claims", "query", searchQuery)
+		embedding, err := h.getEmbedding(ctx, searchQuery)
+		if err != nil {
+			reqLogger.ErrorContext(ctx, "Failed to get embedding for list claims", "error", err)
+			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process search query.")
+		}
+		if len(embedding) > 0 {
+			params.SearchEmbedding = pgvector.NewVector(embedding)
+		}
 	}
 
 	// --- Execute the Query ---
@@ -457,13 +490,43 @@ func (h *InsuranceHandler) getExecutionPlan(ctx context.Context, question string
 
 func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCall) (*InsuranceContext, error) {
 	var insuranceCtx InsuranceContext
+	reqLogger := h.logger.With("plan_execution", true)
 
 	for _, toolCall := range plan {
 		switch toolCall.ToolName {
+		case "get_claims_data":
+			params := insurance.ListClaimsParams{
+				Limit:	100,
+				Offset:	0,
+				AdjusterAssigned: pgtype.Text{String: toolCall.Arguments["adjuster_assigned"], Valid: toolCall.Arguments["adjuster_assigned"] != ""},
+				Status:           pgtype.Text{String: toolCall.Arguments["status"], Valid: toolCall.Arguments["status"] != ""},
+				PolicyNumber:     pgtype.Text{String: toolCall.Arguments["policy_number"], Valid: toolCall.Arguments["policy_number"] != ""},
+				SortBy:           toolCall.Arguments["sort_by"],
+				SortDirection:    toolCall.Arguments["sort_direction"],
+			}
+
+			if searchQuery, ok := toolCall.Arguments["semantic_search_query"]; ok {
+				embedding, err := h.getEmbedding(ctx, searchQuery)
+				if err != nil {
+					reqLogger.ErrorContext(ctx, "Failed to get embedding for get_claims_data tool", "error", err)
+					continue
+				}
+				params.SearchEmbedding = pgvector.NewVector(embedding)
+			}
+
+			claims, err := h.queries.ListClaims(ctx, params)
+			if err != nil {
+				reqLogger.ErrorContext(ctx, "Failed to execute 'get_claims_data' tool", "error", err)
+				continue
+			}
+			insuranceCtx.ClaimsData = claims
+			reqLogger.InfoContext(ctx, "Executed tool: get_claims_data", "results_found", len(claims))
+
 		case "find_context_in_documents":
 			searchQuery, ok := toolCall.Arguments["search_query"]
 			if !ok {
-				return nil, fmt.Errorf("missing 'search_query' argument for find_context_in_documents")
+				reqLogger.WarnContext(ctx, "Tool call 'find_context_in_documents' missing 'search_query' argument")
+				continue
 			}
 			embedding, err := h.getEmbedding(ctx, searchQuery)
 			if err != nil {
@@ -471,27 +534,51 @@ func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCa
 			}
 
 			pgVec :=pgvector.NewVector(embedding)
-
-
-			knowledgeChunks, err1 := h.queries.SearchKnowledgeChunks(ctx,pgVec))
-			comments, err2 := h.queries(SearchComments(ctx, pgVec)
-			if err1 != nil { hlogger.ErrorContext(ctx, "Failed to search knowledge chunks", "error", err1)}
-			if err2 != nil { hlogger.ErrorContext(ctx, "Failed to search comments", "error", err2)}
-			
 			var combinedResults []SearchResult
-			for _, chunk := range knowledgeChunks {
-				combinedResults = append(combinedResults, SearchResults{
-					Source:		chunk.Source,
-					Text:		chunk.Text,
-					SimilarityScore:	chunk.SimilarityScore.(float32),
-				})
+
+			searchChunksParams := insurance.SearchKnowledgeChunksParams{
+				Embedding: pgVec,
+				Limit:	   5,
 			}
-			for _, comment := range comments {
-				combinedResults = append(combinedResults, SearchResults{
-					Source:		comment.Source,
-					Text:		comment.Text,
-					SimilarityScore:	comment.SimilarityScore.(float32),
-				})
+
+			knowledgeChunks, err1 := h.queries.SearchKnowledgeChunks(ctx,searchChunksParams)
+
+			if err1 != nil { 
+				reqLogger.ErrorContext(ctx, "Failed to search knowledge chunks", "error", err1)
+			} else {
+		
+				for _, chunk := range knowledgeChunks {
+					if sim, ok := chunk.SimilarityScore.(float32); ok {
+						sourceText := "Unknown Source"
+						if s, ok := chunk.Source.(string); ok {
+							sourceText = s
+						}
+						combinedResults = append(combinedResults, SearchResult{
+							Source:		sourceText,
+							Text:		chunk.Text,
+							SimilarityScore: sim,
+						})
+					}
+				}
+			}
+			searchCommentsParams := insurance.SearchCommentsParams{
+				Embedding: pgVec,
+				Limit:	   5,
+			}
+
+			comments, err2 := h.queries.SearchComments(ctx, searchCommentsParams)
+			if err2 != nil { 
+				reqLogger.ErrorContext(ctx, "Failed to search comments", "error", err2)
+			} else {
+				for _, comment := range comments {
+					if sim, ok := comment.SimilarityScore.(float32); ok {
+						combinedResults = append(combinedResults, SearchResult{
+							Source:		comment.Source,
+							Text:		comment.Text,
+							SimilarityScore:  sim,
+						})
+					}
+				}
 			}
 			sort.Slice(combinedResults, func(i, j int) bool {
 				return combinedResults[i].SimilarityScore < combinedResults[j].SimilarityScore
@@ -501,9 +588,9 @@ func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCa
 			if len(topResults) > 5 {
 				topResults = topResults[:5]
 			}
-			var finalChunks []insurance.SearchInsuranceContextRow
+			var finalChunks []SearchResult
 			for _, res := range topResults {
-				finalChunks = append(finalChunks, insurance.SearchInsuranceContextRow{
+				finalChunks = append(finalChunks, SearchResult{
 					Source:		res.Source,
 					Text:		res.Text,
 					SimilarityScore:	res.SimilarityScore,
@@ -511,36 +598,31 @@ func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCa
 			}
 			
 			insuranceCtx.KnowledgeChunks = finalChunks
+			reqLogger.InfoContext(ctx, "Executed tool: find_context_in_documents", "results_found", len(topResults))
 		}
 	}
 	return &insuranceCtx, nil
 }
 
 func (h *InsuranceHandler) synthesizeAnswer(ctx context.Context, question string, context *InsuranceContext) (string, error) {
+	// if only action is fetch claims call, return to front end, no need to synthesize text
+	if len(context.KnowledgeChunks) == 0 && len(context.ClaimsData) > 0 {
+		return "", nil
+	}
+
 	h.logger.InfoContext(ctx, "Synthesizing final answer from hybrid context...")
 	
-	claimsJSON, _ := json.MarshalIndent(context.ClaimsData, "", "  ")
-
-	var chunksText []string
-	for _, chunk := range context.KnowledgeChunks {
-		chunksText = append(chunksText, chunk.Text)
+	templateData := SynthesizerTemplateData{
+		UserQuestion:		question,
+		ClaimsData:		context.ClaimsData,
+		KnowledgeChunks:	context.KnowledgeChunks,
 	}
 
-	templateData := struct {
-		UserQuestion    string
-		StructuredData  string
-		NarrativeChunks []string
-	}{
-		UserQuestion:    question,
-		StructuredData:  string(claimsJSON),
-		NarrativeChunks: chunksText,
-	}
-	
 	var promptBuffer bytes.Buffer
 	if err := h.synthesizerTemplate.Execute(&promptBuffer, templateData); err != nil {
 		return "", fmt.Errorf("failed to execute synthesizer template: %w", err)
 	}
-	
+
 	finalAnswer, err := h.callLLM(ctx, promptBuffer.String(), false)
 	if err != nil {
 		return "", err

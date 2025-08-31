@@ -185,26 +185,37 @@ SELECT
     description_of_loss,
     claim_amount,
     business_status,
-    adjuster_assigned
+    adjuster_assigned,
+    embedding <=> $3::vector AS similarity_score
 FROM vw_insurance_claims
 WHERE
-    adjuster_assigned = COALESCE($3, adjuster_assigned)
+    adjuster_assigned = COALESCE($4, adjuster_assigned)
 AND
-    business_status = COALESCE($4, business_status)
+    business_status = COALESCE($5, business_status)
 AND
-    policy_number = COALESCE($5, policy_number)
+    policy_number = COALESCE($6, policy_number)
+AND
+    (vector_dims($3::vector) IS NULL OR (embedding <=> $3::vector) < 0.8)
 ORDER BY
+    similarity_score ASC,
+    CASE WHEN $7::text = 'claim_amount' AND $8::text = 'asc' THEN claim_amount END ASC,
+    CASE WHEN $7::text = 'claim_amount' AND $8::text = 'desc' THEN claim_amount END DESC,
+    CASE WHEN $7::text = 'date_of_loss' AND $8::text = 'asc' THEN date_of_loss END ASC,
+    CASE WHEN $7::text = 'date_of_loss' AND $8::text = 'desc' THEN date_of_loss END DESC,
     date_of_loss DESC
 LIMIT $1
 OFFSET $2
 `
 
 type ListClaimsParams struct {
-	Limit            int32       `json:"limit"`
-	Offset           int32       `json:"offset"`
-	AdjusterAssigned pgtype.Text `json:"adjuster_assigned"`
-	Status           pgtype.Text `json:"status"`
-	PolicyNumber     pgtype.Text `json:"policy_number"`
+	Limit            int32           `json:"limit"`
+	Offset           int32           `json:"offset"`
+	SearchEmbedding  pgvector.Vector `json:"search_embedding"`
+	AdjusterAssigned pgtype.Text     `json:"adjuster_assigned"`
+	Status           pgtype.Text     `json:"status"`
+	PolicyNumber     pgtype.Text     `json:"policy_number"`
+	SortBy           string          `json:"sort_by"`
+	SortDirection    string          `json:"sort_direction"`
 }
 
 type ListClaimsRow struct {
@@ -222,6 +233,7 @@ type ListClaimsRow struct {
 	ClaimAmount       pgtype.Numeric     `json:"claim_amount"`
 	BusinessStatus    string             `json:"business_status"`
 	AdjusterAssigned  string             `json:"adjuster_assigned"`
+	SimilarityScore   interface{}        `json:"similarity_score"`
 }
 
 // backend/sql/apps/insurance/queries/insurance_queries.sql
@@ -230,9 +242,12 @@ func (q *Queries) ListClaims(ctx context.Context, arg ListClaimsParams) ([]ListC
 	rows, err := q.db.Query(ctx, listClaims,
 		arg.Limit,
 		arg.Offset,
+		arg.SearchEmbedding,
 		arg.AdjusterAssigned,
 		arg.Status,
 		arg.PolicyNumber,
+		arg.SortBy,
+		arg.SortDirection,
 	)
 	if err != nil {
 		return nil, err
@@ -256,6 +271,7 @@ func (q *Queries) ListClaims(ctx context.Context, arg ListClaimsParams) ([]ListC
 			&i.ClaimAmount,
 			&i.BusinessStatus,
 			&i.AdjusterAssigned,
+			&i.SimilarityScore,
 		); err != nil {
 			return nil, err
 		}
@@ -337,8 +353,13 @@ WHERE
     embedding IS NOT NULL
 ORDER BY
     similarity_score ASC
-LIMIT 5
+LIMIT $2
 `
+
+type SearchCommentsParams struct {
+	Embedding pgvector.Vector `json:"embedding"`
+	Limit     int32           `json:"limit"`
+}
 
 type SearchCommentsRow struct {
 	Source          string      `json:"source"`
@@ -347,8 +368,8 @@ type SearchCommentsRow struct {
 }
 
 // Searches comments semantically.
-func (q *Queries) SearchComments(ctx context.Context, embedding pgvector.Vector) ([]SearchCommentsRow, error) {
-	rows, err := q.db.Query(ctx, searchComments, embedding)
+func (q *Queries) SearchComments(ctx context.Context, arg SearchCommentsParams) ([]SearchCommentsRow, error) {
+	rows, err := q.db.Query(ctx, searchComments, arg.Embedding, arg.Limit)
 	if err != nil {
 		return nil, err
 	}
@@ -369,7 +390,7 @@ func (q *Queries) SearchComments(ctx context.Context, embedding pgvector.Vector)
 
 const searchKnowledgeChunks = `-- name: SearchKnowledgeChunks :many
 SELECT
-    'Knowledge Chunk from ' || (custom_properties->>'metadata'->>'document_name')::VARCHAR AS source,
+    'Knowledge Chunk from ' || (custom_properties->'metadata'->>'document_name')::VARCHAR AS source,
     (custom_properties->>'chunk_text')::TEXT AS TEXT,
     embedding <=> $1 AS similarity_score
 FROM
@@ -378,8 +399,13 @@ WHERE
     item_type = 'KNOWLEDGE_CHUNK'
 ORDER BY
     similarity_score ASC
-LIMIT 5
+LIMIT $2
 `
+
+type SearchKnowledgeChunksParams struct {
+	Embedding pgvector.Vector `json:"embedding"`
+	Limit     int32           `json:"limit"`
+}
 
 type SearchKnowledgeChunksRow struct {
 	Source          interface{} `json:"source"`
@@ -388,8 +414,8 @@ type SearchKnowledgeChunksRow struct {
 }
 
 // Searches semantically the knowledge base
-func (q *Queries) SearchKnowledgeChunks(ctx context.Context, embedding pgvector.Vector) ([]SearchKnowledgeChunksRow, error) {
-	rows, err := q.db.Query(ctx, searchKnowledgeChunks, embedding)
+func (q *Queries) SearchKnowledgeChunks(ctx context.Context, arg SearchKnowledgeChunksParams) ([]SearchKnowledgeChunksRow, error) {
+	rows, err := q.db.Query(ctx, searchKnowledgeChunks, arg.Embedding, arg.Limit)
 	if err != nil {
 		return nil, err
 	}

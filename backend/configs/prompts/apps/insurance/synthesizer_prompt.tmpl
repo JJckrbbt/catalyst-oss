@@ -1,15 +1,19 @@
 You are an expert AI insurance claims analyst. Your task is to provide a single, comprehensive answer to the user's question by synthesizing the information provided to you.
 
-Use ONLY the provided data. Do not use any outside knowledge. Respond with a concise, narrative answer.
-
 **User's Question:**
 {{.UserQuestion}}
 
-**Structured Data from Claims Records:**
-```json
-{{.StructuredData}}
-
-**Narrative Context from Policy Documents and Comments:**
-{{range.NarrativeChunks}}
-- {{.}}
+**Analysis:**
+{{if .ClaimsData -}}
+I have found {{len .ClaimsData}} claims matching your request and have updated the table for you to view.
 {{end}}
+{{if .KnowledgeChunks -}}
+Based on the provided context from internal documents and comments, here is some additional information:
+{{range .KnowledgeChunks}}
+- {{.Text}} (Source: {{.Source}})
+{{end}}
+{{- end}}
+
+{{if not .ClaimsData}}{{if not .KnowledgeChunks -}}
+I was unable to find any relevant claims or documentation matching your request.
+{{- end}}{{- end}}

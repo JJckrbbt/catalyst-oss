@@ -16,7 +16,8 @@ SELECT
     description_of_loss,
     claim_amount,
     business_status,
-    adjuster_assigned
+    adjuster_assigned,
+    embedding <=> sqlc.narg('search_embedding')::vector AS similarity_score
 FROM vw_insurance_claims
 WHERE
     adjuster_assigned = COALESCE(sqlc.narg('adjuster_assigned'), adjuster_assigned)
@@ -24,7 +25,14 @@ AND
     business_status = COALESCE(sqlc.narg('status'), business_status)
 AND
     policy_number = COALESCE(sqlc.narg('policy_number'), policy_number)
+AND
+    (vector_dims(sqlc.narg('search_embedding')::vector) IS NULL OR (embedding <=> sqlc.narg('search_embedding')::vector) < 0.8)
 ORDER BY
+    similarity_score ASC,
+    CASE WHEN sqlc.arg(sort_by)::text = 'claim_amount' AND sqlc.arg(sort_direction)::text = 'asc' THEN claim_amount END ASC,
+    CASE WHEN sqlc.arg(sort_by)::text = 'claim_amount' AND sqlc.arg(sort_direction)::text = 'desc' THEN claim_amount END DESC,
+    CASE WHEN sqlc.arg(sort_by)::text = 'date_of_loss' AND sqlc.arg(sort_direction)::text = 'asc' THEN date_of_loss END ASC,
+    CASE WHEN sqlc.arg(sort_by)::text = 'date_of_loss' AND sqlc.arg(sort_direction)::text = 'desc' THEN date_of_loss END DESC,
     date_of_loss DESC
 LIMIT $1
 OFFSET $2;
@@ -98,7 +106,7 @@ ORDER BY
 -- name: SearchKnowledgeChunks :many
 -- Searches semantically the knowledge base
 SELECT
-    'Knowledge Chunk from ' || (custom_properties->>'metadata'->>'document_name')::VARCHAR AS source,
+    'Knowledge Chunk from ' || (custom_properties->'metadata'->>'document_name')::VARCHAR AS source,
     (custom_properties->>'chunk_text')::TEXT AS TEXT,
     embedding <=> $1 AS similarity_score
 FROM
@@ -107,7 +115,7 @@ WHERE
     item_type = 'KNOWLEDGE_CHUNK'
 ORDER BY
     similarity_score ASC
-LIMIT 5;
+LIMIT $2;
 
 -- name: SearchComments :many
 -- Searches comments semantically.
@@ -121,4 +129,4 @@ WHERE
     embedding IS NOT NULL
 ORDER BY
     similarity_score ASC
-LIMIT 5;
+LIMIT $2;
