@@ -9,6 +9,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
 
 const getClaimDetails = `-- name: GetClaimDetails :one
@@ -315,6 +316,88 @@ func (q *Queries) ListPolicyholders(ctx context.Context, arg ListPolicyholdersPa
 			&i.CustomerLevel,
 			&i.ActivePolicies,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchComments = `-- name: SearchComments :many
+SELECT
+    'Comment' AS source,
+    comment::TEXT AS text,
+    embedding <=> $1 AS similarity_score
+FROM
+    comments
+WHERE
+    embedding IS NOT NULL
+ORDER BY
+    similarity_score ASC
+LIMIT 5
+`
+
+type SearchCommentsRow struct {
+	Source          string      `json:"source"`
+	Text            string      `json:"text"`
+	SimilarityScore interface{} `json:"similarity_score"`
+}
+
+// Searches comments semantically.
+func (q *Queries) SearchComments(ctx context.Context, embedding pgvector.Vector) ([]SearchCommentsRow, error) {
+	rows, err := q.db.Query(ctx, searchComments, embedding)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchCommentsRow
+	for rows.Next() {
+		var i SearchCommentsRow
+		if err := rows.Scan(&i.Source, &i.Text, &i.SimilarityScore); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const searchKnowledgeChunks = `-- name: SearchKnowledgeChunks :many
+SELECT
+    'Knowledge Chunk from ' || (custom_properties->>'metadata'->>'document_name')::VARCHAR AS source,
+    (custom_properties->>'chunk_text')::TEXT AS TEXT,
+    embedding <=> $1 AS similarity_score
+FROM
+    items
+WHERE
+    item_type = 'KNOWLEDGE_CHUNK'
+ORDER BY
+    similarity_score ASC
+LIMIT 5
+`
+
+type SearchKnowledgeChunksRow struct {
+	Source          interface{} `json:"source"`
+	Text            string      `json:"text"`
+	SimilarityScore interface{} `json:"similarity_score"`
+}
+
+// Searches semantically the knowledge base
+func (q *Queries) SearchKnowledgeChunks(ctx context.Context, embedding pgvector.Vector) ([]SearchKnowledgeChunksRow, error) {
+	rows, err := q.db.Query(ctx, searchKnowledgeChunks, embedding)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchKnowledgeChunksRow
+	for rows.Next() {
+		var i SearchKnowledgeChunksRow
+		if err := rows.Scan(&i.Source, &i.Text, &i.SimilarityScore); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

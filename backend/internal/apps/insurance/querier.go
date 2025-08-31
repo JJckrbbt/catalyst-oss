@@ -8,6 +8,7 @@ import (
 	"context"
 
 	"github.com/jackc/pgx/v5/pgtype"
+	"github.com/pgvector/pgvector-go"
 )
 
 type Querier interface {
@@ -22,6 +23,10 @@ type Querier interface {
 	ListClaims(ctx context.Context, arg ListClaimsParams) ([]ListClaimsRow, error)
 	// Fetches a paginated and filtered list of policyholders.
 	ListPolicyholders(ctx context.Context, arg ListPolicyholdersParams) ([]VwPolicyholder, error)
+	// Searches comments semantically.
+	SearchComments(ctx context.Context, embedding pgvector.Vector) ([]SearchCommentsRow, error)
+	// Searches semantically the knowledge base
+	SearchKnowledgeChunks(ctx context.Context, embedding pgvector.Vector) ([]SearchKnowledgeChunksRow, error)
 }
 
 var _ Querier = (*Queries)(nil)

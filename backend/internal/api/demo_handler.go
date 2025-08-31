@@ -21,42 +21,11 @@ import (
 
 // --- Struct Definitions ---
 
-type PlannerResponse struct {
-	ToolCalls []ToolCall `json:"tool_calls"`
-}
-type ToolCall struct {
-	ToolName  string            `json:"tool"`
-	Arguments map[string]string `json:"arguments"`
-}
 
 type HybridContext struct {
 	MissionFacts    *demo.VwApolloMissionFact
 	KnowledgeChunks []demo.FindSimilarMissionKnowledgeRow
 }
-
-type LLMRequestBody struct {
-	Model          string          `json:"model"`
-	Messages       []Message       `json:"messages"`
-	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
-}
-
-type Message struct {
-	Role    string `json:"role"`
-	Content string `json:"content"`
-}
-
-type ResponseFormat struct {
-	Type string `json:"type"`
-}
-
-type LLMResponse struct {
-	Choices []struct {
-		Message struct {
-			Content string `json:"content"`
-		} `json:"message"`
-	} `json:"choices"`
-}
-
 type DemoHandler struct {
 	queries             *demo.Queries
 	logger              *slog.Logger

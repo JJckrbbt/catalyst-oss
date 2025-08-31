@@ -94,3 +94,31 @@ AND
     ie.event_type = 'CLAIM_STATUS_CHANGED'
 ORDER BY
     ie.created_at DESC;
+
+-- name: SearchKnowledgeChunks :many
+-- Searches semantically the knowledge base
+SELECT
+    'Knowledge Chunk from ' || (custom_properties->>'metadata'->>'document_name')::VARCHAR AS source,
+    (custom_properties->>'chunk_text')::TEXT AS TEXT,
+    embedding <=> $1 AS similarity_score
+FROM
+    items
+WHERE
+    item_type = 'KNOWLEDGE_CHUNK'
+ORDER BY
+    similarity_score ASC
+LIMIT 5;
+
+-- name: SearchComments :many
+-- Searches comments semantically.
+SELECT
+    'Comment' AS source,
+    comment::TEXT AS text,
+    embedding <=> $1 AS similarity_score
+FROM
+    comments
+WHERE
+    embedding IS NOT NULL
+ORDER BY
+    similarity_score ASC
+LIMIT 5;

@@ -8,9 +8,11 @@ import (
 	"log/slog"
 	"net/http"
 	"encoding/json"
+	"strings"
 	"strconv"
 	"time"
 	"fmt"
+	"sort"
 	"io"
 
 	"github.com/jackc/pgx/v5/pgtype"
@@ -20,12 +22,59 @@ import (
 	"github.com/labstack/echo/v4"
 )
 
+// --- Structs for RAG pipeline ---
+type PlannerResponse struct {
+	ToolCalls []ToolCall `json:"tool_calls"`
+}
+
+type ToolCall struct {
+	ToolName	string			`json:"tool"`
+	Arguments	map[string]string	`json:"arguments"`
+}
+
+type InsuranceContext struct {
+	ClaimsData		[]insurance.ListClaimsRow
+	KnowledgeChunks		[]insurance.SearchInsuranceContextRow
+}
+
+type LLMRequestBody struct {
+	Model		string		`json:"model"`
+	Messages	[]Message	`json:"messages"`
+	ResponseFormat	*ResponseFormat	`json:"response_format,omitempty"`
+}
+
+type Message struct {
+	Role	string	`json:"role"`
+	Content	string	`json:"content"`
+}
+
+type ResponseFormat struct {
+	Type	string	`json:"type"`
+}
+
+type LLMResponse struct {
+	Choices []struct {
+		Message struct {
+			Content string `json:"content"`
+		} `json:"message"`
+	} `json:"choices"`
+}
+
+type SearchResult struct {
+	Source		string
+	Text		string
+	SimilarityScore	float32
+}
+
 // InsuranceHandler is the handler for our new insurance application module.
 type InsuranceHandler struct {
 	queries *insurance.Queries
 	platformQuerier repository.Querier
 	httpClient  *http.Client
 	embeddingServiceURL string
+	plannerTemplate		*template.Template
+	synthesizerTemplate	*template.Template
+	openAIAPIKey		string
 	logger  *slog.Logger
 }
 
@@ -46,12 +95,25 @@ type EmbeddingResponse struct {
 }
 
 // NewInsuranceHandler creates a new instance of the InsuranceHandler.
-func NewInsuranceHandler(q *insurance.Queries, pq repository.Querier, logger *slog.Logger) *InsuranceHandler {
+func NewInsuranceHandler(q *insurance.Queries, pq repository.Querier, apiKey string, logger *slog.Logger) *InsuranceHandler {
+	plannerTmpl, err := template.ParseFiles("backend/configs/prompts/apps/insurance/insurance_planner_prompt.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse insuance planner template: %w", err)
+	}
+	
+	synthesizerTmpl, err := template.ParseFiles("backend/configs/prompts/apps/insurance/synthesizer_prompt.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse insurance synthesizer template: %w", err)
+	}
+
 	return &InsuranceHandler{
 		queries: q,
 		platformQuerier: pq,
 		httpClient:          &http.Client{Timeout: 30 * time.Second},
 		embeddingServiceURL: "http://localhost:5001/embed",
+		plannerTemplate:	plannerTmpl,
+		synthesizerTemplate:	synthesizerTmpl,
+		openAIAPIKey:		apiKey,
 		logger:  logger.With("component", "insurance_handler"),
 	}
 }
@@ -307,7 +369,7 @@ func (h *InsuranceHandler) HandleCreateComment(c echo.Context) error {
 	return c.JSON(http.StatusCreated, newComment)
 }
 
-
+// getEmbedding gets a vector embedding from python microservice to power similarity search
 func (h *InsuranceHandler) getEmbedding(ctx context.Context, textToEmbed string) ([]float32, error) {
 	reqBody, err := json.Marshal(EmbeddingRequest{Text: textToEmbed})
 	if err != nil {
@@ -338,4 +400,208 @@ func (h *InsuranceHandler) getEmbedding(ctx context.Context, textToEmbed string)
 
 	return embeddingResp.Embedding, nil
 }
+
+// --- RAG Handler ---
+func (h *InsuranceHandler) HandleInsuranceQuery(c echo.Context) error {
+	ctx := c.Request().Context()
+	question := c.FormValue("question")
+	if question == "" {
+		return echo.NewHTTPError(http.StatusBadRequest, "form value 'question' is required")
+	}
+
+	plan, err := h.getExecutionPlan(ctx, question)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "RAG Error: Failed to get execution plan", "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Error planning query")
+	}
+
+	contextData, err := h.getContextFromPlan(ctx, plan)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "RAG Error: Failed to execute plan", "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Error executing plan")
+	}
+
+	finalAnswer, err := h.synthesizeAnswer(ctx, question, contextData)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "RAG Error: Failed to synthesize answer", "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Error synthesizing answer")
+	}
+
+	return c.JSON(http.StatusOK, map[string]interface{}{"answer": finalAnswer})
+}
+
+// --- Helper functions for RAG ---
+
+func (h *InsuranceHandler) getExecutionPlan(ctx context.Context, question string) ([]ToolCall, error) {
+	var promptBuffer bytes.Buffer
+	if err := h.plannerTemplate.Execute(&promptBuffer, map[string]string{"UserQuestion": question}); err != nil {
+		return nil, fmt.Errorf("failed to execute planner template: %w", err)
+	}
+
+	llmResponseContent, err := h.callLLM(ctx, promptBuffer.String(), true)
+	if err != nil {
+		return nil, err
+	}
+	
+	cleanedJSON := strings.TrimSpace(llmResponseContent)
+	cleanedJSON = strings.TrimPrefix(cleanedJSON, "```json")
+	cleanedJSON = strings.TrimSuffix(cleanedJSON, "```")
+	
+	var plannerResponse PlannerResponse
+	if err := json.Unmarshal([]byte(cleanedJSON), &plannerResponse); err != nil {
+		return nil, fmt.Errorf("failed to unmarshal tool call plan from LLM content: %w. Raw content: %s", err, llmResponseContent)
+	}
+
+	return plannerResponse.ToolCalls, nil
+}
+
+func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCall) (*InsuranceContext, error) {
+	var insuranceCtx InsuranceContext
+
+	for _, toolCall := range plan {
+		switch toolCall.ToolName {
+		case "find_context_in_documents":
+			searchQuery, ok := toolCall.Arguments["search_query"]
+			if !ok {
+				return nil, fmt.Errorf("missing 'search_query' argument for find_context_in_documents")
+			}
+			embedding, err := h.getEmbedding(ctx, searchQuery)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get embedding for context search: %w", err)
+			}
+
+			pgVec :=pgvector.NewVector(embedding)
+
+
+			knowledgeChunks, err1 := h.queries.SearchKnowledgeChunks(ctx,pgVec))
+			comments, err2 := h.queries(SearchComments(ctx, pgVec)
+			if err1 != nil { hlogger.ErrorContext(ctx, "Failed to search knowledge chunks", "error", err1)}
+			if err2 != nil { hlogger.ErrorContext(ctx, "Failed to search comments", "error", err2)}
+			
+			var combinedResults []SearchResult
+			for _, chunk := range knowledgeChunks {
+				combinedResults = append(combinedResults, SearchResults{
+					Source:		chunk.Source,
+					Text:		chunk.Text,
+					SimilarityScore:	chunk.SimilarityScore.(float32),
+				})
+			}
+			for _, comment := range comments {
+				combinedResults = append(combinedResults, SearchResults{
+					Source:		comment.Source,
+					Text:		comment.Text,
+					SimilarityScore:	comment.SimilarityScore.(float32),
+				})
+			}
+			sort.Slice(combinedResults, func(i, j int) bool {
+				return combinedResults[i].SimilarityScore < combinedResults[j].SimilarityScore
+			})
+			
+			topResults := combinedResults
+			if len(topResults) > 5 {
+				topResults = topResults[:5]
+			}
+			var finalChunks []insurance.SearchInsuranceContextRow
+			for _, res := range topResults {
+				finalChunks = append(finalChunks, insurance.SearchInsuranceContextRow{
+					Source:		res.Source,
+					Text:		res.Text,
+					SimilarityScore:	res.SimilarityScore,
+				})
+			}
+			
+			insuranceCtx.KnowledgeChunks = finalChunks
+		}
+	}
+	return &insuranceCtx, nil
+}
+
+func (h *InsuranceHandler) synthesizeAnswer(ctx context.Context, question string, context *InsuranceContext) (string, error) {
+	h.logger.InfoContext(ctx, "Synthesizing final answer from hybrid context...")
+	
+	claimsJSON, _ := json.MarshalIndent(context.ClaimsData, "", "  ")
+
+	var chunksText []string
+	for _, chunk := range context.KnowledgeChunks {
+		chunksText = append(chunksText, chunk.Text)
+	}
+
+	templateData := struct {
+		UserQuestion    string
+		StructuredData  string
+		NarrativeChunks []string
+	}{
+		UserQuestion:    question,
+		StructuredData:  string(claimsJSON),
+		NarrativeChunks: chunksText,
+	}
+	
+	var promptBuffer bytes.Buffer
+	if err := h.synthesizerTemplate.Execute(&promptBuffer, templateData); err != nil {
+		return "", fmt.Errorf("failed to execute synthesizer template: %w", err)
+	}
+	
+	finalAnswer, err := h.callLLM(ctx, promptBuffer.String(), false)
+	if err != nil {
+		return "", err
+	}
+
+	return finalAnswer, nil
+}
+
+func (h *InsuranceHandler) callLLM(ctx context.Context, prompt string, useJSONMode bool) (string, error) {
+	h.logger.InfoContext(ctx, "Executing LLM call", "prompt", prompt)
+
+	apiKey := h.openAIAPIKey
+	if apiKey == "" {
+		return "", fmt.Errorf("OpenAI key is not configured on the handler")
+	}
+
+	payload := LLMRequestBody{
+		Model: "gpt-4o",
+		Messages: []Message{
+			{Role: "user", Content: prompt},
+		},
+	}
+	if useJSONMode {
+		payload.ResponseFormat = &ResponseFormat{Type: "json_object"}
+	}
+
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil {
+		return "", fmt.Errorf("failed to marshal OpenAI request: %w", err)
+	}
+
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(payloadBytes))
+	if err != nil {
+		return "", fmt.Errorf("failed to create OpenAI request: %w", err)
+	}
+
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+
+	resp, err := h.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("failed to call OpenAI API: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		bodyBytes, _ := io.ReadAll(resp.Body)
+		return "", fmt.Errorf("OpenAI API returned non-OK status %d: %s", resp.StatusCode, string(bodyBytes))
+	}
+
+	var llmResponse LLMResponse
+	if err := json.NewDecoder(resp.Body).Decode(&llmResponse); err != nil {
+		return "", fmt.Errorf("failed to decode OpenAI response: %w", err)
+	}
+
+	if len(llmResponse.Choices) == 0 {
+		return "", fmt.Errorf("no choices returned from OpenAI")
+	}
+
+	return llmResponse.Choices[0].Message.Content, nil
+}
+
+
 
