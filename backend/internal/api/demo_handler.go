@@ -68,12 +68,12 @@ type DemoHandler struct {
 }
 
 func NewDemoHandler(q *demo.Queries, logger *slog.Logger, apiKey string) (*DemoHandler, error) {
-	plannerTmpl, err := template.ParseFiles("backend/configs/prompts/planner_prompt.tmpl")
+	plannerTmpl, err := template.ParseFiles("backend/configs/prompts/apps/planner_prompt.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse planner template: %w", err)
 	}
 
-	synthesizerTmpl, err := template.ParseFiles("backend/configs/prompts/synthesizer_prompt.tmpl")
+	synthesizerTmpl, err := template.ParseFiles("backend/configs/prompts/apps/synthesizer_prompt.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse synthesizer template: %w", err)
 	}
