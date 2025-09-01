@@ -14,7 +14,7 @@ type Querier interface {
 	// Fetches the business status change history for a specific claim item
 	GetClaimStatusHistory(ctx context.Context, itemID int64) ([]GetClaimStatusHistoryRow, error)
 	// Fetches the header chunk's source_custom_properties for a given document ID.
-	GetDocumentHeader(ctx context.Context, documentID []byte) (interface{}, error)
+	GetDocumentHeader(ctx context.Context, documentID string) (interface{}, error)
 	// Fetches and sorts claims by semantic similarity.
 	ListClaimsWithVector(ctx context.Context, arg ListClaimsWithVectorParams) ([]ListClaimsWithVectorRow, error)
 	// Fetches a paginated and filtered list of insurance claims without vector search.

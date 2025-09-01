@@ -70,7 +70,7 @@ FROM items
 WHERE
     item_type = 'KNOWLEDGE_CHUNK'
 AND
-    custom_properties->'metadata'->>'document_id' = @document_id
+    custom_properties->'metadata'->>'document_id' = sqlc.arg(document_id)::text
 AND
     custom_properties->'metadata'->>'chunk_number' = '0'
 LIMIT 1;

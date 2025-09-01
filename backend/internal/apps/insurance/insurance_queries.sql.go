@@ -122,14 +122,14 @@ FROM items
 WHERE
     item_type = 'KNOWLEDGE_CHUNK'
 AND
-    custom_properties->'metadata'->>'document_id' = $1
+    custom_properties->'metadata'->>'document_id' = $1::text
 AND
     custom_properties->'metadata'->>'chunk_number' = '0'
 LIMIT 1
 `
 
 // Fetches the header chunk's source_custom_properties for a given document ID.
-func (q *Queries) GetDocumentHeader(ctx context.Context, documentID []byte) (interface{}, error) {
+func (q *Queries) GetDocumentHeader(ctx context.Context, documentID string) (interface{}, error) {
 	row := q.db.QueryRow(ctx, getDocumentHeader, documentID)
 	var structured_metadata interface{}
 	err := row.Scan(&structured_metadata)
