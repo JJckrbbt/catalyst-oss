@@ -13,7 +13,7 @@ AND (sqlc.narg('max_amount')::decimal IS NULL OR claim_amount <= sqlc.narg('max_
 AND (sqlc.narg('adjuster_assigned')::text IS NULL OR adjuster_assigned = sqlc.arg('adjuster_assigned'))
 AND (sqlc.narg('status')::text IS NULL OR business_status = sqlc.arg('status'))
 AND (sqlc.narg('policy_number')::text IS NULL OR policy_number = sqlc.arg('policy_number'))
-AND (embedding <=> @search_embedding::vector) < 0.8
+AND (embedding <=> @search_embedding::vector) < 0.5
 ORDER BY similarity_score ASC
 LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
 
@@ -41,10 +41,14 @@ LIMIT sqlc.arg('limit') OFFSET sqlc.arg('offset');
 -- name: SearchKnowledgeChunks :many
 -- Searches semantically the knowledge base
 SELECT
-    'Knowledge Chunk from ' || (custom_properties->'metadata'->>'document_name')::VARCHAR AS source,
+    (
+    COALESCE(custom_properties->>'metadata.section', 'General Information') ||
+    ' from ' ||
+    COALESCE(custom_properties->>'metadata.document_name', 'Unknown Document')
+    ) AS source,
     COALESCE((custom_properties->>'chunk_text')::TEXT, '') AS text,
     embedding <=> @embedding::vector AS similarity_score,
-    custom_properties->'metadata'->'source_custom_properties' AS structured_metadata
+    custom_properties->>'metadata.source_custom_properties' AS structured_metadata
 FROM items
 WHERE
     item_type = 'KNOWLEDGE_CHUNK' AND embedding IS NOT NULL
@@ -56,8 +60,10 @@ LIMIT sqlc.arg('limit');
 SELECT
     'Comment' AS source,
     comment::TEXT AS text,
+    i.business_key AS claim_id,
     embedding <=> @embedding::vector AS similarity_score
 FROM comments
+JOIN items i ON c.item_id = i.id
 WHERE embedding IS NOT NULL
 ORDER BY similarity_score ASC
 LIMIT sqlc.arg('limit');

@@ -656,7 +656,18 @@ func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCa
 			} else {
 				for _, comment := range comments {
 					score, _ := comment.SimilarityScore.(float64)
-					combinedResults = append(combinedResults, SearchResult{Source: comment.Source, Text: comment.Text, SimilarityScore: float32(score)})
+					
+					commentMetadata := make(map[string]interface{})
+					if comment.ClaimID.Valid {
+						commentMetadata["claim_id"] = comment.ClaimID.String
+					}
+
+					combinedResults = append(combinedResults, SearchResult{
+						Source:		comment.Source, 
+						Text:		comment.Text, 
+						SimilarityScore: float32(score),
+						Metadata:	commentMetadata,
+					})
 				}
 			}
 

@@ -150,7 +150,7 @@ AND ($4::decimal IS NULL OR claim_amount <= $4)
 AND ($5::text IS NULL OR adjuster_assigned = $5)
 AND ($6::text IS NULL OR business_status = $6)
 AND ($7::text IS NULL OR policy_number = $7)
-AND (embedding <=> $1::vector) < 0.8
+AND (embedding <=> $1::vector) < 0.5
 ORDER BY similarity_score ASC
 LIMIT $9 OFFSET $8
 `
@@ -395,8 +395,10 @@ const searchComments = `-- name: SearchComments :many
 SELECT
     'Comment' AS source,
     comment::TEXT AS text,
+    i.business_key AS claim_id,
     embedding <=> $1::vector AS similarity_score
 FROM comments
+JOIN items i ON c.item_id = i.id
 WHERE embedding IS NOT NULL
 ORDER BY similarity_score ASC
 LIMIT $2
@@ -410,6 +412,7 @@ type SearchCommentsParams struct {
 type SearchCommentsRow struct {
 	Source          string      `json:"source"`
 	Text            string      `json:"text"`
+	ClaimID         pgtype.Text `json:"claim_id"`
 	SimilarityScore interface{} `json:"similarity_score"`
 }
 
@@ -423,7 +426,12 @@ func (q *Queries) SearchComments(ctx context.Context, arg SearchCommentsParams) 
 	var items []SearchCommentsRow
 	for rows.Next() {
 		var i SearchCommentsRow
-		if err := rows.Scan(&i.Source, &i.Text, &i.SimilarityScore); err != nil {
+		if err := rows.Scan(
+			&i.Source,
+			&i.Text,
+			&i.ClaimID,
+			&i.SimilarityScore,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -436,10 +444,14 @@ func (q *Queries) SearchComments(ctx context.Context, arg SearchCommentsParams) 
 
 const searchKnowledgeChunks = `-- name: SearchKnowledgeChunks :many
 SELECT
-    'Knowledge Chunk from ' || (custom_properties->'metadata'->>'document_name')::VARCHAR AS source,
+    (
+    COALESCE(custom_properties->>'metadata.section', 'General Information') ||
+    ' from ' ||
+    COALESCE(custom_properties->>'metadata.document_name', 'Unknown Document')
+    ) AS source,
     COALESCE((custom_properties->>'chunk_text')::TEXT, '') AS text,
     embedding <=> $1::vector AS similarity_score,
-    custom_properties->'metadata'->'source_custom_properties' AS structured_metadata
+    custom_properties->>'metadata.source_custom_properties' AS structured_metadata
 FROM items
 WHERE
     item_type = 'KNOWLEDGE_CHUNK' AND embedding IS NOT NULL

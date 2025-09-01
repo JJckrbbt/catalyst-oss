@@ -245,26 +245,30 @@ export default function ClaimsPage() {
           {selectedClaim && (
             <DetailsDrawer
               data={selectedClaim}
-              fields={{
-                main: [
-                  { key: 'policy_number', label: 'Policy #' },
-                  { key: 'claim_type', label: 'Claim Type' },
-                  { key: 'date_of_loss', label: 'Date of Loss' },
-                  { key: 'claim_amount', label: 'Claim Amount', type: 'currency' },
-                  { key: 'adjuster_assigned', label: 'Adjuster' },
-                  { key: 'policyholder_name', label: 'Policyholder' },
-                  { key: 'customer_level', label: 'Customer Level' },
-                  { key: 'customer_since_date', label: 'Customer Since' },
-                ],
-                status: [
-                  { key: 'business_status', label: 'Status', options: ['Submitted', 'Under Review', 'Flagged for Fraud Review', 'Approved', 'Paid', 'Denied'] },
-                ],
-                comments: [],
-              }}
-              onSave={handleSave}
-              onCancel={handleDrawerClose}
-              id={selectedClaim.id}
-              type="item"
+                fields={{
+                  main: [
+                    { key: 'policy_number', label: 'Policy #' },
+                    { key: 'claim_type', label: 'Claim Type' },
+                    { key: 'date_of_loss', label: 'Date of Loss' },
+                    { key: 'claim_amount', label: 'Claim Amount', type: 'currency' },
+                    { key: 'adjuster_assigned', label: 'Adjuster' },
+                    { key: 'policyholder_name', label: 'Policyholder' },
+                    { key: 'customer_level', label: 'Customer Level' },
+                    { key: 'customer_since_date', label: 'Customer Since' },
+                  ],
+                  status: [
+                    { key: 'business_status', label: 'Status', options: ['Submitted', 'Under Review', 'Flagged for Fraud Review', 'Approved', 'Paid', 'Denied'] },
+                  ],
+                  comments: [],
+                  // ADDED: This new property will render the description in its own section
+                  fullWidth: [
+                    { key: 'description_of_loss', label: 'Description of Loss' },
+                  ],
+                }}
+                onSave={handleSave}
+                onCancel={handleDrawerClose}
+                id={selectedClaim.id}
+                type="item"
             />
           )}
         </SheetContent>
