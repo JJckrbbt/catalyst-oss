@@ -8,11 +8,11 @@ business_key:
   - "metadata.chunk_number"
 embed_content:
   source_columns:
-    - "chunked_text"
+    - "chunk_text"
 
 column_mappings:
   - csv_header: "chunked text"
-    json_field: "chunked_text"
+    json_field: "chunk_text"
     validation:
       required: true
 

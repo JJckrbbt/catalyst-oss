@@ -1,20 +1,23 @@
-
 export const apiClient = {
-  request:  async (
+  request: async (
     url: string,
     method: 'GET' | 'POST' | 'PATCH' | 'DELETE',
     token: string,
     body?: any
   ) => {
     try {
-        const headers: HeadersInit = {
-        'Content-Type': 'application/json',
+      const headers: HeadersInit = {
         Authorization: `Bearer ${token}`,
       };
 
+      // Only add the Content-Type header if we are sending a body
+      if (body) {
+        headers['Content-Type'] = 'application/json';
+      }
+
       const options: RequestInit = {
-        method, 
-        headers, 
+        method,
+        headers,
         body: body ? JSON.stringify(body) : undefined,
       };
 
@@ -25,12 +28,13 @@ export const apiClient = {
         try {
           errorData = await response.json();
         } catch (e) {
+          // Ignore if the error response is not JSON
         }
         throw new Error(errorData.message || `HTTP error! status: ${response.status}`);
       }
 
       if (response.status === 204) {
-        return null;
+        return null; // Handle no content responses
       }
 
       return response.json();

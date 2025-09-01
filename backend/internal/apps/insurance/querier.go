@@ -6,8 +6,6 @@ package insurance
 
 import (
 	"context"
-
-	"github.com/jackc/pgx/v5/pgtype"
 )
 
 type Querier interface {
@@ -15,11 +13,12 @@ type Querier interface {
 	GetClaimDetails(ctx context.Context, id int64) (GetClaimDetailsRow, error)
 	// Fetches the business status change history for a specific claim item
 	GetClaimStatusHistory(ctx context.Context, itemID int64) ([]GetClaimStatusHistoryRow, error)
-	// Fetches a single policyholder by their unique PolicyHolder_ID.
-	GetPolicyholderByID(ctx context.Context, policyholderID pgtype.Text) (VwPolicyholder, error)
-	// backend/sql/apps/insurance/queries/insurance_queries.sql
-	// Fetches a paginated and filtered list of insurance claims.
-	ListClaims(ctx context.Context, arg ListClaimsParams) ([]ListClaimsRow, error)
+	// Fetches the header chunk's source_custom_properties for a given document ID.
+	GetDocumentHeader(ctx context.Context, documentID []byte) (interface{}, error)
+	// Fetches and sorts claims by semantic similarity.
+	ListClaimsWithVector(ctx context.Context, arg ListClaimsWithVectorParams) ([]ListClaimsWithVectorRow, error)
+	// Fetches a paginated and filtered list of insurance claims without vector search.
+	ListClaimsWithoutVector(ctx context.Context, arg ListClaimsWithoutVectorParams) ([]ListClaimsWithoutVectorRow, error)
 	// Fetches a paginated and filtered list of policyholders.
 	ListPolicyholders(ctx context.Context, arg ListPolicyholdersParams) ([]VwPolicyholder, error)
 	// Searches comments semantically.

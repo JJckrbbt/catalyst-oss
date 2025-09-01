@@ -5,48 +5,70 @@ package api
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
-	"encoding/json"
+	"sort"
+	"strconv"
 	"strings"
 	"text/template"
-	"strconv"
 	"time"
-	"fmt"
-	"sort"
-	"io"
 
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jjckrbbt/catalyst/backend/internal/apps/insurance"
 	"github.com/jjckrbbt/catalyst/backend/internal/repository"
-	"github.com/pgvector/pgvector-go"
 	"github.com/labstack/echo/v4"
+	"github.com/pgvector/pgvector-go"
+	"github.com/shopspring/decimal"
 )
 
 // --- Structs for RAG pipeline ---
+
+type ChatMessage struct {
+	Sender  string `json:"sender"`
+	Content string `json:"content"`
+}
+
+type InsuranceQueryRequest struct {
+	Question string        `json:"question"`
+	History  []ChatMessage `json:"history"`
+}
+
 type PlannerResponse struct {
 	ToolCalls []ToolCall `json:"tool_calls"`
 }
 
 type ToolCall struct {
-	ToolName	string			`json:"tool"`
-	Arguments	map[string]string	`json:"arguments"`
+	ToolName  string                 `json:"tool"`
+	Arguments map[string]interface{} `json:"arguments"`
 }
 
 type InsuranceContext struct {
-	ClaimsData		[]insurance.ListClaimsRow
-	KnowledgeChunks		[]SearchResult
+	ClaimsData      interface{}
+	KnowledgeChunks []SearchResult
 }
 
 type SynthesizerTemplateData struct {
-	UserQuestion	string
-	ClaimsData	[]insurance.ListClaimsRow
-	KnowledgeChunks	[]SearchResult
+	UserQuestion    string
+	History         []ChatMessage
+	ClaimsData      interface{}
+	KnowledgeChunks []SearchResult
+}
+
+type ActionPlan struct {
+	Type    string      `json:"type"`
+	Payload interface{} `json:"payload"`
+}
+
+type SynthesizerResponse struct {
+	Actions []ActionPlan `json:"actions"`
 }
 
 type Action struct {
-	Type	string		`json:"type"`
-	Payload	interface{}	`json:"payload"`
+	Type    string      `json:"type"`
+	Payload interface{} `json:"payload"`
 }
 
 type QueryApiResponse struct {
@@ -54,18 +76,18 @@ type QueryApiResponse struct {
 }
 
 type LLMRequestBody struct {
-	Model		string		`json:"model"`
-	Messages	[]Message	`json:"messages"`
-	ResponseFormat	*ResponseFormat	`json:"response_format,omitempty"`
+	Model          string          `json:"model"`
+	Messages       []Message       `json:"messages"`
+	ResponseFormat *ResponseFormat `json:"response_format,omitempty"`
 }
 
 type Message struct {
-	Role	string	`json:"role"`
-	Content	string	`json:"content"`
+	Role    string `json:"role"`
+	Content string `json:"content"`
 }
 
 type ResponseFormat struct {
-	Type	string	`json:"type"`
+	Type string `json:"type"`
 }
 
 type LLMResponse struct {
@@ -77,21 +99,21 @@ type LLMResponse struct {
 }
 
 type SearchResult struct {
-	Source		string
-	Text		string
-	SimilarityScore	float32
+	Source          string                 `json:"source"`
+	Text            string                 `json:"text"`
+	SimilarityScore float32                `json:"similarityScore"`
+	Metadata        map[string]interface{} `json:"metadata"`
 }
 
-// InsuranceHandler is the handler for our new insurance application module.
 type InsuranceHandler struct {
-	queries *insurance.Queries
-	platformQuerier repository.Querier
-	httpClient  *http.Client
+	queries             *insurance.Queries
+	platformQuerier     repository.Querier
+	httpClient          *http.Client
 	embeddingServiceURL string
-	plannerTemplate		*template.Template
-	synthesizerTemplate	*template.Template
-	openAIAPIKey		string
-	logger  *slog.Logger
+	plannerTemplate     *template.Template
+	synthesizerTemplate *template.Template
+	openAIAPIKey        string
+	logger              *slog.Logger
 }
 
 type UpdateClaimRequest struct {
@@ -110,580 +132,538 @@ type EmbeddingResponse struct {
 	Embedding []float32 `json:"embedding"`
 }
 
-// NewInsuranceHandler creates a new instance of the InsuranceHandler.
 func NewInsuranceHandler(q *insurance.Queries, pq repository.Querier, apiKey string, logger *slog.Logger) (*InsuranceHandler, error) {
-	plannerTmpl, err := template.ParseFiles("backend/configs/prompts/apps/insurance/insurance_planner_prompt.tmpl")
-	if err != nil {
-		return nil, fmt.Errorf("failed to parse insuance planner template: %w", err)
+	funcMap := template.FuncMap{
+		"marshal": func(v interface{}) (string, error) {
+			if v == nil {
+				return "[]", nil
+			}
+			a, err := json.Marshal(v)
+			if err != nil {
+				return "", err
+			}
+			return string(a), nil
+		},
 	}
-	
-	synthesizerTmpl, err := template.ParseFiles("backend/configs/prompts/apps/insurance/synthesizer_prompt.tmpl")
+
+	plannerTmpl, err := template.New("insurance_planner_prompt.tmpl").Funcs(funcMap).ParseFiles("backend/configs/prompts/apps/insurance/insurance_planner_prompt.tmpl")
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse insurance planner template: %w", err)
+	}
+
+	synthesizerTmpl, err := template.New("synthesizer_prompt.tmpl").Funcs(funcMap).ParseFiles("backend/configs/prompts/apps/insurance/synthesizer_prompt.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse insurance synthesizer template: %w", err)
 	}
 
 	return &InsuranceHandler{
-		queries: q,
-		platformQuerier: pq,
+		queries:             q,
+		platformQuerier:     pq,
 		httpClient:          &http.Client{Timeout: 30 * time.Second},
 		embeddingServiceURL: "http://localhost:5001/embed",
-		plannerTemplate:	plannerTmpl,
-		synthesizerTemplate:	synthesizerTmpl,
-		openAIAPIKey:		apiKey,
-		logger:  logger.With("component", "insurance_handler"),
+		plannerTemplate:     plannerTmpl,
+		synthesizerTemplate: synthesizerTmpl,
+		openAIAPIKey:        apiKey,
+		logger:              logger.With("component", "insurance_handler"),
 	}, nil
 }
 
-// HandleListClaims retrieves a paginated and filtered list of insurance claims.
 func (h *InsuranceHandler) HandleListClaims(c echo.Context) error {
 	ctx := c.Request().Context()
 	reqLogger := h.logger.With("request_id", c.Get("requestID"))
-
-	// --- Parse Pagination and Filtering Parameters ---
 	limit, _ := strconv.ParseInt(c.QueryParam("limit"), 10, 32)
 	if limit <= 0 {
-		limit = 50 // Default limit
+		limit = 50
 	}
-
 	page, _ := strconv.ParseInt(c.QueryParam("page"), 10, 32)
 	if page <= 0 {
-		page = 1 // Default page
+		page = 1
 	}
-
 	offset := (page - 1) * limit
 
-	// --- Build the Params Struct for sqlc ---
-	params := insurance.ListClaimsParams{
-		Limit:  int32(limit),
-		Offset: int32(offset),
-		AdjusterAssigned: pgtype.Text{String: c.QueryParam("adjuster_assigned"), Valid: c.QueryParam("adjuster_assigned") != ""},
-		Status:           pgtype.Text{String: c.QueryParam("status"), Valid: c.QueryParam("status") != ""},
-		PolicyNumber:     pgtype.Text{String: c.QueryParam("policy_number"), Valid: c.QueryParam("policy_number") != ""},
-		SortBy:		  c.QueryParam("sort_by"),
-		SortDirection:	  c.QueryParam("sort_direction"),
-	}
-
-	// --- Semantic Search Logic ---
+	var results interface{}
+	var err error
 	searchQuery := c.QueryParam("semantic_search_query")
+
 	if searchQuery != "" {
-		reqLogger.InfoContext(ctx, "Performing semantic search on claims", "query", searchQuery)
-		embedding, err := h.getEmbedding(ctx, searchQuery)
-		if err != nil {
-			reqLogger.ErrorContext(ctx, "Failed to get embedding for list claims", "error", err)
+		embedding, embErr := h.getEmbedding(ctx, searchQuery)
+		if embErr != nil {
+			reqLogger.ErrorContext(ctx, "Failed to get embedding", "error", embErr)
 			return echo.NewHTTPError(http.StatusInternalServerError, "Failed to process search query.")
 		}
-		if len(embedding) > 0 {
-			params.SearchEmbedding = pgvector.NewVector(embedding)
+		params := insurance.ListClaimsWithVectorParams{
+			Limit:            int32(limit),
+			Offset:           int32(offset),
+			SearchEmbedding:  pgvector.NewVector(embedding),
+			ClaimID:          pgtype.Text{String: c.QueryParam("claim_id"), Valid: c.QueryParam("claim_id") != ""},
+			AdjusterAssigned: pgtype.Text{String: c.QueryParam("adjuster_assigned"), Valid: c.QueryParam("adjuster_assigned") != ""},
+			Status:           pgtype.Text{String: c.QueryParam("status"), Valid: c.QueryParam("status") != ""},
+			PolicyNumber:     pgtype.Text{String: c.QueryParam("policy_number"), Valid: c.QueryParam("policy_number") != ""},
 		}
+		results, err = h.queries.ListClaimsWithVector(ctx, params)
+	} else {
+		params := insurance.ListClaimsWithoutVectorParams{
+			Limit:            int32(limit),
+			Offset:           int32(offset),
+			ClaimID:          pgtype.Text{String: c.QueryParam("claim_id"), Valid: c.QueryParam("claim_id") != ""},
+			AdjusterAssigned: pgtype.Text{String: c.QueryParam("adjuster_assigned"), Valid: c.QueryParam("adjuster_assigned") != ""},
+			Status:           pgtype.Text{String: c.QueryParam("status"), Valid: c.QueryParam("status") != ""},
+			PolicyNumber:     pgtype.Text{String: c.QueryParam("policy_number"), Valid: c.QueryParam("policy_number") != ""},
+			SortBy:           c.QueryParam("sort_by"),
+			SortDirection:    c.QueryParam("sort_direction"),
+		}
+		results, err = h.queries.ListClaimsWithoutVector(ctx, params)
 	}
-
-	// --- Execute the Query ---
-	claims, err := h.queries.ListClaims(ctx, params)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "Failed to list insurance claims", "error", err)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve claims")
 	}
-
-	h.logger.InfoContext(ctx, "Successfully retrieved claims list", "count", len(claims))
-	return c.JSON(http.StatusOK, claims)
+	var claimsCount int
+	switch v := results.(type) {
+	case []insurance.ListClaimsWithVectorRow:
+		claimsCount = len(v)
+	case []insurance.ListClaimsWithoutVectorRow:
+		claimsCount = len(v)
+	}
+	h.logger.InfoContext(ctx, "Successfully retrieved claims list", "count", claimsCount)
+	return c.JSON(http.StatusOK, results)
 }
 
-// HandleListPolicyholders retrieves a paginated and filtered list of policyholders.
 func (h *InsuranceHandler) HandleListPolicyholders(c echo.Context) error {
-    ctx := c.Request().Context()
-
-    limit, _ := strconv.ParseInt(c.QueryParam("limit"), 10, 32)
-    if limit <= 0 {
-        limit = 50
-    }
-    page, _ := strconv.ParseInt(c.QueryParam("page"), 10, 32)
-    if page <= 0 {
-        page = 1
-    }
-    offset := (page - 1) * limit
-
-    params := insurance.ListPolicyholdersParams{
-        Limit:          int32(limit),
-        Offset:         int32(offset),
-        State:          pgtype.Text{String: c.QueryParam("state"), Valid: c.QueryParam("state") != ""},
-        CustomerLevel:  pgtype.Text{String: c.QueryParam("customer_level"), Valid: c.QueryParam("customer_level") != ""},
-    }
-
-    policyholders, err := h.queries.ListPolicyholders(ctx, params)
-    if err != nil {
-        h.logger.ErrorContext(ctx, "Failed to list policyholders", "error", err)
-        return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve policyholders")
-    }
-
-    h.logger.InfoContext(ctx, "Successfully retrieved policyholders list", "count", len(policyholders))
-    return c.JSON(http.StatusOK, policyholders)
+	ctx := c.Request().Context()
+	limit, _ := strconv.ParseInt(c.QueryParam("limit"), 10, 32)
+	if limit <= 0 { limit = 50 }
+	page, _ := strconv.ParseInt(c.QueryParam("page"), 10, 32)
+	if page <= 0 { page = 1 }
+	offset := (page - 1) * limit
+	params := insurance.ListPolicyholdersParams{
+		Limit:  int32(limit),
+		Offset: int32(offset),
+		State:  pgtype.Text{String: c.QueryParam("state"), Valid: c.QueryParam("state") != ""},
+		CustomerLevel: pgtype.Text{String: c.QueryParam("customer_level"), Valid: c.QueryParam("customer_level") != ""},
+	}
+	policyholders, err := h.queries.ListPolicyholders(ctx, params)
+	if err != nil {
+		h.logger.ErrorContext(ctx, "Failed to list policyholders", "error", err)
+		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve policyholders")
+	}
+	h.logger.InfoContext(ctx, "Successfully retrieved policyholders list", "count", len(policyholders))
+	return c.JSON(http.StatusOK, policyholders)
 }
 
-// HandleGetClaimDetails retrieves a single, detailed claim record joined with policyholdeer info
 func (h *InsuranceHandler) HandleGetClaimDetails(c echo.Context) error {
 	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid claim ID format")
 	}
-
 	claimDetails, err := h.queries.GetClaimDetails(ctx, id)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "Failed to get claim details", "error", err, "claim_id", id)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve claim details")
 	}
-
 	h.logger.InfoContext(ctx, "Successfully retrieved claim details", "claim_id", id)
 	return c.JSON(http.StatusOK, claimDetails)
 }
 
-// HandleGetClaimStatusHistory retrieves the business status history for a single claim
 func (h *InsuranceHandler) HandleGetClaimStatusHistory(c echo.Context) error {
 	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
 	if err != nil {
 		return echo.NewHTTPError(http.StatusBadRequest, "Invalid claim ID format")
 	}
-
 	history, err := h.queries.GetClaimStatusHistory(ctx, id)
 	if err != nil {
 		h.logger.ErrorContext(ctx, "Failed to get claim status history", "error", err, "claim_id", id)
 		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve claim history")
 	}
-
 	type HistoryResponse struct {
-		ID		int64		`json:"ID"`
-		EventTimestamp	time.Time	`json:"event_timestamp"`
-		EventData	json.RawMessage	`json:"event_data"`
-		UserName	pgtype.Text	`json:"user_name"`
+		ID             int64           `json:"ID"`
+		EventTimestamp time.Time       `json:"event_timestamp"`
+		EventData      json.RawMessage `json:"event_data"`
+		UserName       pgtype.Text     `json:"user_name"`
 	}
-
 	response := make([]HistoryResponse, len(history))
 	for i, event := range history {
 		response[i] = HistoryResponse{
-			ID:		event.EventID,
-			EventTimestamp:	event.EventTimestamp.Time,
-			EventData:	event.EventData,
-			UserName:	event.UserName,
+			ID:             event.EventID,
+			EventTimestamp: event.EventTimestamp.Time,
+			EventData:      event.EventData,
+			UserName:       event.UserName,
 		}
 	}
-
 	return c.JSON(http.StatusOK, response)
 }
 
-// HandleUpdateClaim retrieves claim, updates fields, and inserts back to db
 func (h *InsuranceHandler) HandleUpdateClaim(c echo.Context) error {
 	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid claim ID format")
-	}
-
+	if err != nil { return echo.NewHTTPError(http.StatusBadRequest, "Invalid claim ID format") }
 	var req UpdateClaimRequest
-	if err := c.Bind(&req); err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body")
-	}
-
+	if err := c.Bind(&req); err != nil { return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body") }
 	var userID int64 = 1
-
 	existingItem, err := h.platformQuerier.GetItemForUpdate(ctx, id)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusNotFound, "Item not found")
-	}
-
+	if err != nil { return echo.NewHTTPError(http.StatusNotFound, "Item not found") }
 	var customProps map[string]interface{}
-	if err := json.Unmarshal(existingItem.CustomProperties, &customProps); err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to parse existing item properties")
-	}
-
+	if err := json.Unmarshal(existingItem.CustomProperties, &customProps); err != nil { return echo.NewHTTPError(http.StatusInternalServerError, "Failed to parse existing item properties") }
 	oldStatus := customProps["Status"]
 	customProps["Status"] = req.BusinessStatus
-
 	updatedCustomProps, err := json.Marshal(customProps)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to serialize updated properties")
-	}
-
+	if err != nil { return echo.NewHTTPError(http.StatusInternalServerError, "Failed to serialize updated properties") }
 	updateParams := repository.UpdateItemParams{
-		ID:	id,
-		Scope:	existingItem.Scope,
-		Status:	existingItem.Status,
+		ID: id, Scope: existingItem.Scope, Status: existingItem.Status,
 		CustomProperties: updatedCustomProps,
 	}
-
 	_, err = h.platformQuerier.UpdateItem(ctx, updateParams)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "Failed to update item", "error", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update claim")
-	}
-
-	eventData := map[string]interface{}{
-		"old_status": oldStatus,
-		"new_status": req.BusinessStatus,
-	}
+	if err != nil { h.logger.ErrorContext(ctx, "Failed to update item", "error", err); return echo.NewHTTPError(http.StatusInternalServerError, "Failed to update claim") }
+	eventData := map[string]interface{}{"old_status": oldStatus, "new_status": req.BusinessStatus}
 	eventDataJSON, _ := json.Marshal(eventData)
-
 	eventParams := repository.CreateItemEventParams{
-		ItemID:		id, 
-		EventType:	"CLAIM_STATUS_CHANGED",
-		EventData:	eventDataJSON,
-		CreatedBy:	userID,
+		ItemID: id, EventType: "CLAIM_STATUS_CHANGED",
+		EventData: eventDataJSON, CreatedBy: userID,
 	}
-	
 	_, err = h.platformQuerier.CreateItemEvent(ctx, eventParams)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "Failed to create status change event", "error", err)
-		echo.NewHTTPError(http.StatusInternalServerError, "Failed to create audit event for claim update")
-	}
-
+	if err != nil { h.logger.ErrorContext(ctx, "Failed to create status change event", "error", err); echo.NewHTTPError(http.StatusInternalServerError, "Failed to create audit event for claim update") }
 	return c.NoContent(http.StatusNoContent)
 }
 
-// HandleListComments retrieves all comments for a specific claim
 func (h *InsuranceHandler) HandleListComments(c echo.Context) error {
 	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid claim ID format")
-	}
-
+	if err != nil { return echo.NewHTTPError(http.StatusBadRequest, "Invalid claim ID format") }
 	comments, err := h.platformQuerier.ListCommentsForItem(ctx, id)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "Failed to list comments for item", "error", err, "item_id", id)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve comments")
-	}
-
+	if err != nil { h.logger.ErrorContext(ctx, "Failed to list comments", "error", err, "item_id", id); return echo.NewHTTPError(http.StatusInternalServerError, "Failed to retrieve comments") }
 	return c.JSON(http.StatusOK, comments)
 }
 
-// HandleCreateComment adds a new comment to a specific claim
 func (h *InsuranceHandler) HandleCreateComment(c echo.Context) error {
 	ctx := c.Request().Context()
 	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
-	if err != nil {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid claim ID format")
-	}
-
+	if err != nil { return echo.NewHTTPError(http.StatusBadRequest, "Invalid claim ID format") }
 	var req CreateCommentRequest
-	if err := c.Bind(&req); err != nil || req.CommentText == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body: comment_text is required")
-	}
-
+	if err := c.Bind(&req); err != nil || req.CommentText == "" { return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body: comment_text is required") }
 	var userID int64 = 1
-
-	params := repository.CreateCommentParams{
-		ItemID:		id, 
-		Comment:	req.CommentText,
-		UserID:		userID,
-	}
-
+	params := repository.CreateCommentParams{ ItemID: id, Comment: req.CommentText, UserID: userID, }
 	newComment, err := h.platformQuerier.CreateComment(ctx, params)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "Failed to create comment", "error", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Failed to save comment")
-	}
-
-	// TODO: in production, make a background job
+	if err != nil { h.logger.ErrorContext(ctx, "Failed to create comment", "error", err); return echo.NewHTTPError(http.StatusInternalServerError, "Failed to save comment") }
 	embedding, err := h.getEmbedding(ctx, newComment.Comment)
-	if err != nil {
-		h.logger.WarnContext(ctx, "Failed to generate embedding for comment, but comment was saved", "error", err, "comment_id", newComment.ID)
-	} else {
-		updateEmbeddingParams := repository.SetCommentEmbeddingParams{
-			ID:		newComment.ID,
-			Embedding:	pgvector.NewVector(embedding),
-		}
+	if err != nil { h.logger.WarnContext(ctx, "Failed to generate embedding for comment", "error", err, "comment_id", newComment.ID) } else {
+		updateEmbeddingParams := repository.SetCommentEmbeddingParams{ ID: newComment.ID, Embedding: pgvector.NewVector(embedding), }
 		err = h.platformQuerier.SetCommentEmbedding(ctx, updateEmbeddingParams)
-		if err != nil {
-			h.logger.ErrorContext(ctx, "Failed to save embedding for comment", "error", err, "comment_id", newComment.ID)
-		}
+		if err != nil { h.logger.ErrorContext(ctx, "Failed to save embedding for comment", "error", err, "comment_id", newComment.ID) }
 	}
-	// TODO: parse comment for user mentions and call AddMentionToComment in loop
-
 	return c.JSON(http.StatusCreated, newComment)
 }
 
-// getEmbedding gets a vector embedding from python microservice to power similarity search
 func (h *InsuranceHandler) getEmbedding(ctx context.Context, textToEmbed string) ([]float32, error) {
 	reqBody, err := json.Marshal(EmbeddingRequest{Text: textToEmbed})
-	if err != nil {
-		return nil, fmt.Errorf("failed to marshal embedding request: %w", err)
-	}
-
+	if err != nil { return nil, fmt.Errorf("failed to marshal embedding request: %w", err) }
 	req, err := http.NewRequestWithContext(ctx, "POST", h.embeddingServiceURL, bytes.NewBuffer(reqBody))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create embedding request: %w", err)
-	}
+	if err != nil { return nil, fmt.Errorf("failed to create embedding request: %w", err) }
 	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("failed to call embedding service: %w", err)
-	}
+	resp, err := h.httpClient.Do(req); if err != nil { return nil, fmt.Errorf("failed to call embedding service: %w", err) }
 	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("embedding service returned non-OK status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
+	if resp.StatusCode != http.StatusOK { bodyBytes, _ := io.ReadAll(resp.Body); return nil, fmt.Errorf("embedding service returned non-OK status %d: %s", resp.StatusCode, string(bodyBytes)) }
 	var embeddingResp EmbeddingResponse
-	if err := json.NewDecoder(resp.Body).Decode(&embeddingResp); err != nil {
-		return nil, fmt.Errorf("failed to decode embedding response: %w", err)
-	}
-
+	if err := json.NewDecoder(resp.Body).Decode(&embeddingResp); err != nil { return nil, fmt.Errorf("failed to decode embedding response: %w", err) }
 	return embeddingResp.Embedding, nil
+}
+
+func (h *InsuranceHandler) callLLM(ctx context.Context, prompt string, useJSONMode bool) (string, error) {
+	h.logger.InfoContext(ctx, "Executing LLM call", "prompt", prompt)
+	apiKey := h.openAIAPIKey
+	if apiKey == "" { return "", fmt.Errorf("OpenAI key is not configured on the handler") }
+	payload := LLMRequestBody{ Model: "gpt-4o", Messages: []Message{ {Role: "user", Content: prompt}, }, }
+	if useJSONMode { payload.ResponseFormat = &ResponseFormat{Type: "json_object"} }
+	payloadBytes, err := json.Marshal(payload)
+	if err != nil { return "", fmt.Errorf("failed to marshal OpenAI request: %w", err) }
+	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(payloadBytes))
+	if err != nil { return "", fmt.Errorf("failed to create OpenAI request: %w", err) }
+	req.Header.Set("Content-Type", "application/json"); req.Header.Set("Authorization", "Bearer "+apiKey)
+	resp, err := h.httpClient.Do(req); if err != nil { return "", fmt.Errorf("failed to call OpenAI API: %w", err) }
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK { bodyBytes, _ := io.ReadAll(resp.Body); return "", fmt.Errorf("OpenAI API returned non-OK status %d: %s", resp.StatusCode, string(bodyBytes)) }
+	var llmResponse LLMResponse
+	if err := json.NewDecoder(resp.Body).Decode(&llmResponse); err != nil { return "", fmt.Errorf("failed to decode OpenAI response: %w", err) }
+	if len(llmResponse.Choices) == 0 { return "", fmt.Errorf("no choices returned from OpenAI") }
+	h.logger.InfoContext(ctx, "Received LLM response content", "content", llmResponse.Choices[0].Message.Content)
+	return llmResponse.Choices[0].Message.Content, nil
 }
 
 // --- RAG Handler ---
 func (h *InsuranceHandler) HandleInsuranceQuery(c echo.Context) error {
 	ctx := c.Request().Context()
-	question := c.FormValue("question")
-	if question == "" {
-		return echo.NewHTTPError(http.StatusBadRequest, "form value 'question' is required")
-	}
+	var req InsuranceQueryRequest
+	if err := c.Bind(&req); err != nil { return echo.NewHTTPError(http.StatusBadRequest, "Invalid request body: "+err.Error()) }
+	if req.Question == "" { return echo.NewHTTPError(http.StatusBadRequest, "field 'question' is required") }
 
-	plan, err := h.getExecutionPlan(ctx, question)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "RAG Error: Failed to get execution plan", "error", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Error planning query")
-	}
-
+	plan, err := h.getExecutionPlan(ctx, req.Question, req.History)
+	if err != nil { h.logger.ErrorContext(ctx, "RAG Error: Failed to get execution plan", "error", err); return echo.NewHTTPError(http.StatusInternalServerError, "Error planning query") }
+	
 	contextData, err := h.getContextFromPlan(ctx, plan)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "RAG Error: Failed to execute plan", "error", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Error executing plan")
-	}
+	if err != nil { h.logger.ErrorContext(ctx, "RAG Error: Failed to execute plan", "error", err); return echo.NewHTTPError(http.StatusInternalServerError, "Error executing plan") }
+	
+	finalApiResponse, err := h.synthesizeAnswer(ctx, req.Question, req.History, contextData)
+	if err != nil { h.logger.ErrorContext(ctx, "RAG Error: Failed to synthesize answer", "error", err); return echo.NewHTTPError(http.StatusInternalServerError, "Error synthesizing answer") }
 
-	finalAnswer, err := h.synthesizeAnswer(ctx, question, contextData)
-	if err != nil {
-		h.logger.ErrorContext(ctx, "RAG Error: Failed to synthesize answer", "error", err)
-		return echo.NewHTTPError(http.StatusInternalServerError, "Error synthesizing answer")
-	}
-
-	return c.JSON(http.StatusOK, map[string]interface{}{"answer": finalAnswer})
+	return c.JSON(http.StatusOK, map[string]interface{}{"answer": finalApiResponse})
 }
 
-// --- Helper functions for RAG ---
-
-func (h *InsuranceHandler) getExecutionPlan(ctx context.Context, question string) ([]ToolCall, error) {
+func (h *InsuranceHandler) getExecutionPlan(ctx context.Context, question string, history []ChatMessage) ([]ToolCall, error) {
+	type PlannerTemplateData struct { UserQuestion string; History []ChatMessage }
+	templateData := PlannerTemplateData{ UserQuestion: question, History: history }
 	var promptBuffer bytes.Buffer
-	if err := h.plannerTemplate.Execute(&promptBuffer, map[string]string{"UserQuestion": question}); err != nil {
-		return nil, fmt.Errorf("failed to execute planner template: %w", err)
-	}
-
+	if err := h.plannerTemplate.Execute(&promptBuffer, templateData); err != nil { return nil, fmt.Errorf("failed to execute planner template: %w", err) }
+	
 	llmResponseContent, err := h.callLLM(ctx, promptBuffer.String(), true)
-	if err != nil {
-		return nil, err
-	}
+	if err != nil { return nil, err }
 	
-	cleanedJSON := strings.TrimSpace(llmResponseContent)
-	cleanedJSON = strings.TrimPrefix(cleanedJSON, "```json")
-	cleanedJSON = strings.TrimSuffix(cleanedJSON, "```")
-	
+	cleanedJSON := strings.TrimPrefix(strings.TrimSpace(llmResponseContent), "```json"); cleanedJSON = strings.TrimSuffix(cleanedJSON, "```")
 	var plannerResponse PlannerResponse
-	if err := json.Unmarshal([]byte(cleanedJSON), &plannerResponse); err != nil {
-		return nil, fmt.Errorf("failed to unmarshal tool call plan from LLM content: %w. Raw content: %s", err, llmResponseContent)
-	}
-
+	if err := json.Unmarshal([]byte(cleanedJSON), &plannerResponse); err != nil { return nil, fmt.Errorf("failed to unmarshal tool call plan from LLM: %w. Raw content: %s", err, llmResponseContent) }
+	
 	return plannerResponse.ToolCalls, nil
 }
+
 
 func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCall) (*InsuranceContext, error) {
 	var insuranceCtx InsuranceContext
 	reqLogger := h.logger.With("plan_execution", true)
 
 	for _, toolCall := range plan {
+		// --- DEFINE HELPER FUNCTIONS ONCE ---
+		getStringArg := func(key string) string {
+			if val, ok := toolCall.Arguments[key]; ok {
+				if strVal, ok := val.(string); ok {
+					return strVal
+				}
+			}
+			return ""
+		}
+		parseAmount := func(amountVal interface{}) pgtype.Numeric {
+			if amountVal == nil {
+				return pgtype.Numeric{Valid: false}
+			}
+			var amountStr string
+			switch v := amountVal.(type) {
+			case string:
+				amountStr = v
+			case float64:
+				amountStr = fmt.Sprintf("%.2f", v)
+			default:
+				return pgtype.Numeric{Valid: false}
+			}
+			if amountStr == "" {
+				return pgtype.Numeric{Valid: false}
+			}
+			d, err := decimal.NewFromString(amountStr)
+			if err != nil {
+				return pgtype.Numeric{Valid: false}
+			}
+			num := new(pgtype.Numeric)
+			_ = num.Scan(d.String())
+			return *num
+		}
+
+		// --- EXECUTE TOOL CALLS ---
 		switch toolCall.ToolName {
 		case "get_claims_data":
-			params := insurance.ListClaimsParams{
-				Limit:	100,
-				Offset:	0,
-				AdjusterAssigned: pgtype.Text{String: toolCall.Arguments["adjuster_assigned"], Valid: toolCall.Arguments["adjuster_assigned"] != ""},
-				Status:           pgtype.Text{String: toolCall.Arguments["status"], Valid: toolCall.Arguments["status"] != ""},
-				PolicyNumber:     pgtype.Text{String: toolCall.Arguments["policy_number"], Valid: toolCall.Arguments["policy_number"] != ""},
-				SortBy:           toolCall.Arguments["sort_by"],
-				SortDirection:    toolCall.Arguments["sort_direction"],
-			}
+			var claimsData interface{}
+			var err error
 
-			if searchQuery, ok := toolCall.Arguments["semantic_search_query"]; ok {
-				embedding, err := h.getEmbedding(ctx, searchQuery)
-				if err != nil {
-					reqLogger.ErrorContext(ctx, "Failed to get embedding for get_claims_data tool", "error", err)
+			searchQuery := getStringArg("semantic_search_query")
+			if searchQuery != "" {
+				embedding, embErr := h.getEmbedding(ctx, searchQuery)
+				if embErr != nil {
+					reqLogger.ErrorContext(ctx, "Failed to get embedding", "error", embErr)
 					continue
 				}
-				params.SearchEmbedding = pgvector.NewVector(embedding)
+				params := insurance.ListClaimsWithVectorParams{
+					Limit:            100,
+					Offset:           0,
+					SearchEmbedding:  pgvector.NewVector(embedding), // This field is named SearchEmbedding in the generated code
+					ClaimID:          pgtype.Text{String: getStringArg("claim_id"), Valid: getStringArg("claim_id") != ""},
+					AdjusterAssigned: pgtype.Text{String: getStringArg("adjuster_assigned"), Valid: getStringArg("adjuster_assigned") != ""},
+					Status:           pgtype.Text{String: getStringArg("status"), Valid: getStringArg("status") != ""},
+					PolicyNumber:     pgtype.Text{String: getStringArg("policy_number"), Valid: getStringArg("policy_number") != ""},
+					MinAmount:        parseAmount(toolCall.Arguments["min_amount"]),
+					MaxAmount:        parseAmount(toolCall.Arguments["max_amount"]),
+				}
+				claims, vectorErr := h.queries.ListClaimsWithVector(ctx, params)
+				claimsData = claims
+				err = vectorErr
+			} else {
+				params := insurance.ListClaimsWithoutVectorParams{
+					Limit:            100,
+					Offset:           0,
+					ClaimID:          pgtype.Text{String: getStringArg("claim_id"), Valid: getStringArg("claim_id") != ""},
+					AdjusterAssigned: pgtype.Text{String: getStringArg("adjuster_assigned"), Valid: getStringArg("adjuster_assigned") != ""},
+					Status:           pgtype.Text{String: getStringArg("status"), Valid: getStringArg("status") != ""},
+					PolicyNumber:     pgtype.Text{String: getStringArg("policy_number"), Valid: getStringArg("policy_number") != ""},
+					SortBy:           getStringArg("sort_by"),
+					SortDirection:    getStringArg("sort_direction"),
+					MinAmount:        parseAmount(toolCall.Arguments["min_amount"]),
+					MaxAmount:        parseAmount(toolCall.Arguments["max_amount"]),
+				}
+				claims, nonVectorErr := h.queries.ListClaimsWithoutVector(ctx, params)
+				claimsData = claims
+				err = nonVectorErr
 			}
-
-			claims, err := h.queries.ListClaims(ctx, params)
 			if err != nil {
 				reqLogger.ErrorContext(ctx, "Failed to execute 'get_claims_data' tool", "error", err)
 				continue
 			}
-			insuranceCtx.ClaimsData = claims
-			reqLogger.InfoContext(ctx, "Executed tool: get_claims_data", "results_found", len(claims))
+
+			var claimsCount int
+			switch v := claimsData.(type) {
+			case []insurance.ListClaimsWithVectorRow:
+				claimsCount = len(v)
+			case []insurance.ListClaimsWithoutVectorRow:
+				claimsCount = len(v)
+			}
+			insuranceCtx.ClaimsData = claimsData
+			reqLogger.InfoContext(ctx, "Executed tool: get_claims_data", "results_found", claimsCount)
 
 		case "find_context_in_documents":
-			searchQuery, ok := toolCall.Arguments["search_query"]
-			if !ok {
-				reqLogger.WarnContext(ctx, "Tool call 'find_context_in_documents' missing 'search_query' argument")
+			searchQuery := getStringArg("search_query")
+			if searchQuery == "" {
+				reqLogger.WarnContext(ctx, "Missing 'search_query' argument")
 				continue
 			}
 			embedding, err := h.getEmbedding(ctx, searchQuery)
 			if err != nil {
-				return nil, fmt.Errorf("failed to get embedding for context search: %w", err)
+				reqLogger.ErrorContext(ctx, "Failed to get embedding", "error", err)
+				continue
 			}
-
-			pgVec :=pgvector.NewVector(embedding)
+			pgVec := pgvector.NewVector(embedding)
 			var combinedResults []SearchResult
 
-			searchChunksParams := insurance.SearchKnowledgeChunksParams{
-				Embedding: pgVec,
-				Limit:	   5,
-			}
-
-			knowledgeChunks, err1 := h.queries.SearchKnowledgeChunks(ctx,searchChunksParams)
-
-			if err1 != nil { 
+			knowledgeChunks, err1 := h.queries.SearchKnowledgeChunks(ctx, insurance.SearchKnowledgeChunksParams{
+				Embedding: pgVec, // This field is named Embedding
+				Limit:     10,
+			})
+			if err1 != nil {
 				reqLogger.ErrorContext(ctx, "Failed to search knowledge chunks", "error", err1)
 			} else {
-		
 				for _, chunk := range knowledgeChunks {
-					if sim, ok := chunk.SimilarityScore.(float32); ok {
-						sourceText := "Unknown Source"
-						if s, ok := chunk.Source.(string); ok {
-							sourceText = s
-						}
-						combinedResults = append(combinedResults, SearchResult{
-							Source:		sourceText,
-							Text:		chunk.Text,
-							SimilarityScore: sim,
-						})
+					sourceText, _ := chunk.Source.(string)
+					textValue, _ := chunk.Text.(string)
+					score, _ := chunk.SimilarityScore.(float64)
+					var metadata map[string]interface{}
+					if rawJSON, ok := chunk.StructuredMetadata.([]byte); ok && rawJSON != nil {
+						_ = json.Unmarshal(rawJSON, &metadata)
 					}
+					combinedResults = append(combinedResults, SearchResult{Source: sourceText, Text: textValue, SimilarityScore: float32(score), Metadata: metadata})
 				}
 			}
-			searchCommentsParams := insurance.SearchCommentsParams{
-				Embedding: pgVec,
-				Limit:	   5,
-			}
 
-			comments, err2 := h.queries.SearchComments(ctx, searchCommentsParams)
-			if err2 != nil { 
+			comments, err2 := h.queries.SearchComments(ctx, insurance.SearchCommentsParams{
+				Embedding: pgVec, // This field is named Embedding
+				Limit:     10,
+			})
+			if err2 != nil {
 				reqLogger.ErrorContext(ctx, "Failed to search comments", "error", err2)
 			} else {
 				for _, comment := range comments {
-					if sim, ok := comment.SimilarityScore.(float32); ok {
-						combinedResults = append(combinedResults, SearchResult{
-							Source:		comment.Source,
-							Text:		comment.Text,
-							SimilarityScore:  sim,
-						})
-					}
+					score, _ := comment.SimilarityScore.(float64)
+					combinedResults = append(combinedResults, SearchResult{Source: comment.Source, Text: comment.Text, SimilarityScore: float32(score)})
 				}
 			}
-			sort.Slice(combinedResults, func(i, j int) bool {
-				return combinedResults[i].SimilarityScore < combinedResults[j].SimilarityScore
-			})
-			
+
+			sort.Slice(combinedResults, func(i, j int) bool { return combinedResults[i].SimilarityScore < combinedResults[j].SimilarityScore })
 			topResults := combinedResults
 			if len(topResults) > 5 {
 				topResults = topResults[:5]
 			}
-			var finalChunks []SearchResult
-			for _, res := range topResults {
-				finalChunks = append(finalChunks, SearchResult{
-					Source:		res.Source,
-					Text:		res.Text,
-					SimilarityScore:	res.SimilarityScore,
-				})
+
+			enrichedResults := []SearchResult{}
+			for _, result := range topResults {
+				enrichedResult := result
+				if enrichedResult.Metadata != nil {
+					if docID, ok := enrichedResult.Metadata["document_id"].(string); ok && docID != "" {
+						headerMetadataJSON, err := h.queries.GetDocumentHeader(ctx, pgtype.Text{String: docID, Valid: true})
+						if err != nil {
+							reqLogger.WarnContext(ctx, "Could not fetch header", "doc_id", docID)
+						} else if headerMetadataJSON != nil {
+							if rawJSON, ok := headerMetadataJSON.([]byte); ok {
+								var headerMetadata map[string]interface{}
+								if err := json.Unmarshal(rawJSON, &headerMetadata); err == nil {
+									if enrichedResult.Metadata == nil {
+										enrichedResult.Metadata = make(map[string]interface{})
+									}
+									for key, value := range headerMetadata {
+										enrichedResult.Metadata[key] = value
+									}
+								}
+							}
+						}
+					}
+				}
+				enrichedResults = append(enrichedResults, enrichedResult)
 			}
-			
-			insuranceCtx.KnowledgeChunks = finalChunks
-			reqLogger.InfoContext(ctx, "Executed tool: find_context_in_documents", "results_found", len(topResults))
+			insuranceCtx.KnowledgeChunks = enrichedResults
+			reqLogger.InfoContext(ctx, "Executed tool: find_context_in_documents", "results_found", len(enrichedResults))
 		}
 	}
 	return &insuranceCtx, nil
 }
 
-func (h *InsuranceHandler) synthesizeAnswer(ctx context.Context, question string, context *InsuranceContext) (string, error) {
-	// if only action is fetch claims call, return to front end, no need to synthesize text
-	if len(context.KnowledgeChunks) == 0 && len(context.ClaimsData) > 0 {
-		return "", nil
-	}
 
+func (h *InsuranceHandler) synthesizeAnswer(ctx context.Context, question string, history []ChatMessage, context *InsuranceContext) (QueryApiResponse, error) {
 	h.logger.InfoContext(ctx, "Synthesizing final answer from hybrid context...")
-	
 	templateData := SynthesizerTemplateData{
-		UserQuestion:		question,
-		ClaimsData:		context.ClaimsData,
-		KnowledgeChunks:	context.KnowledgeChunks,
+		UserQuestion:    question,
+		History:         history,
+		ClaimsData:      context.ClaimsData,
+		KnowledgeChunks: context.KnowledgeChunks,
 	}
-
 	var promptBuffer bytes.Buffer
 	if err := h.synthesizerTemplate.Execute(&promptBuffer, templateData); err != nil {
-		return "", fmt.Errorf("failed to execute synthesizer template: %w", err)
+		return QueryApiResponse{}, fmt.Errorf("failed to execute synthesizer template: %w", err)
 	}
-
-	finalAnswer, err := h.callLLM(ctx, promptBuffer.String(), false)
+	llmResponseContent, err := h.callLLM(ctx, promptBuffer.String(), true)
 	if err != nil {
-		return "", err
+		return QueryApiResponse{}, err
 	}
-
-	return finalAnswer, nil
+	var synthResponse SynthesizerResponse
+	if err := json.Unmarshal([]byte(llmResponseContent), &synthResponse); err != nil {
+		return QueryApiResponse{}, fmt.Errorf("failed to unmarshal synthesizer response from LLM: %w. Raw content: %s", err, llmResponseContent)
+	}
+	var finalApiResponse QueryApiResponse
+	if synthResponse.Actions == nil {
+		return finalApiResponse, nil
+	}
+	for _, plannedAction := range synthResponse.Actions {
+		finalAction := Action{Type: plannedAction.Type}
+		switch plannedAction.Type {
+		case "text_response":
+			finalAction.Payload = plannedAction.Payload
+		case "render_table":
+			if wantsTable, ok := plannedAction.Payload.(bool); ok && wantsTable {
+				finalAction.Payload = context.ClaimsData
+			}
+		case "open_detail_drawer":
+			if wantsDrawer, ok := plannedAction.Payload.(bool); ok && wantsDrawer {
+				var claimID int64
+				if claims, ok := context.ClaimsData.([]insurance.ListClaimsWithVectorRow); ok && len(claims) == 1 {
+					claimID = claims[0].ID
+				} else if claims, ok := context.ClaimsData.([]insurance.ListClaimsWithoutVectorRow); ok && len(claims) == 1 {
+					claimID = claims[0].ID
+				}
+				if claimID > 0 {
+					claimDetails, err := h.queries.GetClaimDetails(ctx, claimID)
+					if err != nil {
+						reqLogger := h.logger.With("request_id", c.Get("requestID"))
+						reqLogger.ErrorContext(ctx, "Failed to get claim details for drawer action", "error", err, "claim_id", claimID)
+						continue
+					}
+					finalAction.Payload = claimDetails
+				}
+			}
+		}
+		if finalAction.Payload != nil {
+			finalApiResponse.Actions = append(finalApiResponse.Actions, finalAction)
+		}
+	}
+	return finalApiResponse, nil
 }
-
-func (h *InsuranceHandler) callLLM(ctx context.Context, prompt string, useJSONMode bool) (string, error) {
-	h.logger.InfoContext(ctx, "Executing LLM call", "prompt", prompt)
-
-	apiKey := h.openAIAPIKey
-	if apiKey == "" {
-		return "", fmt.Errorf("OpenAI key is not configured on the handler")
-	}
-
-	payload := LLMRequestBody{
-		Model: "gpt-4o",
-		Messages: []Message{
-			{Role: "user", Content: prompt},
-		},
-	}
-	if useJSONMode {
-		payload.ResponseFormat = &ResponseFormat{Type: "json_object"}
-	}
-
-	payloadBytes, err := json.Marshal(payload)
-	if err != nil {
-		return "", fmt.Errorf("failed to marshal OpenAI request: %w", err)
-	}
-
-	req, err := http.NewRequestWithContext(ctx, "POST", "https://api.openai.com/v1/chat/completions", bytes.NewBuffer(payloadBytes))
-	if err != nil {
-		return "", fmt.Errorf("failed to create OpenAI request: %w", err)
-	}
-
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-
-	resp, err := h.httpClient.Do(req)
-	if err != nil {
-		return "", fmt.Errorf("failed to call OpenAI API: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		bodyBytes, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("OpenAI API returned non-OK status %d: %s", resp.StatusCode, string(bodyBytes))
-	}
-
-	var llmResponse LLMResponse
-	if err := json.NewDecoder(resp.Body).Decode(&llmResponse); err != nil {
-		return "", fmt.Errorf("failed to decode OpenAI response: %w", err)
-	}
-
-	if len(llmResponse.Choices) == 0 {
-		return "", fmt.Errorf("no choices returned from OpenAI")
-	}
-
-	return llmResponse.Choices[0].Message.Content, nil
-}
-
-
-

@@ -123,10 +123,17 @@ func (h *DemoHandler) getContextFromPlan(ctx context.Context, plan []ToolCall) (
 	for _, toolCall := range plan {
 		switch toolCall.ToolName {
 		case "get_mission_facts":
-			missionName, ok := toolCall.Arguments["mission_name"]
+			missionNameVal, ok := toolCall.Arguments["mission_name"]
 			if !ok {
 				return nil, fmt.Errorf("missing 'mission_name' argument for get_mission_facts")
 			}
+
+			// Perform a type assertion to get the string value
+			missionName, ok := missionNameVal.(string)
+			if !ok {
+				return nil, fmt.Errorf("argument 'mission_name' is not a valid string")
+			}
+
 			facts, err := h.queries.GetMissionFacts(ctx, missionName)
 			if err != nil {
 				reqLogger.ErrorContext(ctx, "Failed to execute GetMissionFacts", "error", err, "mission_name", missionName)
@@ -136,10 +143,17 @@ func (h *DemoHandler) getContextFromPlan(ctx context.Context, plan []ToolCall) (
 			reqLogger.InfoContext(ctx,"Executed tool: get_mission_facts", "result", facts)
 
 		case "find_mission_context":
-			searchQuery, ok := toolCall.Arguments["search_query"]
+			searchQueryVal, ok := toolCall.Arguments["search_query"]
 			if !ok {
 				return nil, fmt.Errorf("missing 'search_query' argument for find_mission_context")
 			}
+			
+			// Perform a type assertion to get the string value
+			searchQuery, ok := searchQueryVal.(string)
+			if !ok {
+				return nil, fmt.Errorf("argument 'search_query' is not a valid string")
+			}
+
 			embedding, err := h.getEmbedding(ctx, searchQuery)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get embedding for context search: %w", err)
@@ -155,6 +169,8 @@ func (h *DemoHandler) getContextFromPlan(ctx context.Context, plan []ToolCall) (
 	}
 	return &hybridCtx, nil
 }
+
+
 
 func (h *DemoHandler) synthesizeAnswer(ctx context.Context, question string, context *HybridContext) (string, error) {
 	h.logger.InfoContext(ctx, "Synthesizing final answer from hybrid context...")
@@ -189,7 +205,6 @@ func (h *DemoHandler) synthesizeAnswer(ctx context.Context, question string, con
 	return finalAnswer, nil
 }
 
-// CORRECTED: getEmbedding now correctly marshals the request and handles errors.
 func (h *DemoHandler) getEmbedding(ctx context.Context, textToEmbed string) ([]float32, error) {
 	reqBody, err := json.Marshal(EmbeddingRequest{Text: textToEmbed})
 	if err != nil {

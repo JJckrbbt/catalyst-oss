@@ -14,31 +14,13 @@ import (
 
 const getClaimDetails = `-- name: GetClaimDetails :one
 SELECT
-    c.id,
-    c.item_type,
-    c.claim_id,
-    c.policy_number,
-    c.system_status,
-    c.created_at,
-    c.updated_at,
-    c.policyholder_id,
-    c.claim_type,
-    c.date_of_loss,
-    c.description_of_loss,
-    c.claim_amount,
-    c.business_status,
-    c.adjuster_assigned,
-    p.policyholder_name,
-    p.city,
-    p.state,
-    p.customer_since_date,
-    p.customer_level
-FROM
-    vw_insurance_claims c
-JOIN
-    vw_policyholders p ON c.policyholder_id = p.policyholder_id
-WHERE
-    c.id = $1
+    c.id, c.item_type, c.claim_id, c.policy_number, c.system_status, c.created_at, c.updated_at,
+    c.policyholder_id, c.claim_type, c.date_of_loss, c.description_of_loss, c.claim_amount,
+    c.business_status, c.adjuster_assigned, p.policyholder_name, p.city, p.state,
+    p.customer_since_date, p.customer_level
+FROM vw_insurance_claims c
+JOIN vw_policyholders p ON c.policyholder_id = p.policyholder_id
+WHERE c.id = $1
 `
 
 type GetClaimDetailsRow struct {
@@ -93,20 +75,11 @@ func (q *Queries) GetClaimDetails(ctx context.Context, id int64) (GetClaimDetail
 
 const getClaimStatusHistory = `-- name: GetClaimStatusHistory :many
 SELECT
-    ie.id AS event_id,
-    ie.created_at AS event_timestamp,
-    ie.event_data, 
-    u.display_name AS user_name
-FROM
-    items_events ie
-JOIN
-    users u ON ie.created_by = u.id
-WHERE
-    ie.item_id = $1
-AND
-    ie.event_type = 'CLAIM_STATUS_CHANGED'
-ORDER BY
-    ie.created_at DESC
+    ie.id AS event_id, ie.created_at AS event_timestamp, ie.event_data, u.display_name AS user_name
+FROM items_events ie
+JOIN users u ON ie.created_by = u.id
+WHERE ie.item_id = $1 AND ie.event_type = 'CLAIM_STATUS_CHANGED'
+ORDER BY ie.created_at DESC
 `
 
 type GetClaimStatusHistoryRow struct {
@@ -142,83 +115,59 @@ func (q *Queries) GetClaimStatusHistory(ctx context.Context, itemID int64) ([]Ge
 	return items, nil
 }
 
-const getPolicyholderByID = `-- name: GetPolicyholderByID :one
-SELECT id, item_type, policyholder_id, state, status, created_at, updated_at, policyholder_name, city, customer_since_date, customer_level, active_policies
-FROM vw_policyholders
-WHERE policyholder_id = $1
+const getDocumentHeader = `-- name: GetDocumentHeader :one
+SELECT
+    custom_properties->'metadata'->'source_custom_properties' as structured_metadata
+FROM items
+WHERE
+    item_type = 'KNOWLEDGE_CHUNK'
+AND
+    custom_properties->'metadata'->>'document_id' = $1
+AND
+    custom_properties->'metadata'->>'chunk_number' = '0'
+LIMIT 1
 `
 
-// Fetches a single policyholder by their unique PolicyHolder_ID.
-func (q *Queries) GetPolicyholderByID(ctx context.Context, policyholderID pgtype.Text) (VwPolicyholder, error) {
-	row := q.db.QueryRow(ctx, getPolicyholderByID, policyholderID)
-	var i VwPolicyholder
-	err := row.Scan(
-		&i.ID,
-		&i.ItemType,
-		&i.PolicyholderID,
-		&i.State,
-		&i.Status,
-		&i.CreatedAt,
-		&i.UpdatedAt,
-		&i.PolicyholderName,
-		&i.City,
-		&i.CustomerSinceDate,
-		&i.CustomerLevel,
-		&i.ActivePolicies,
-	)
-	return i, err
+// Fetches the header chunk's source_custom_properties for a given document ID.
+func (q *Queries) GetDocumentHeader(ctx context.Context, documentID []byte) (interface{}, error) {
+	row := q.db.QueryRow(ctx, getDocumentHeader, documentID)
+	var structured_metadata interface{}
+	err := row.Scan(&structured_metadata)
+	return structured_metadata, err
 }
 
-const listClaims = `-- name: ListClaims :many
-
-SELECT 
-    id,
-    item_type,
-    claim_id,
-    policy_number,
-    system_status,
-    created_at,
-    updated_at,
-    policyholder_id,
-    claim_type,
-    date_of_loss,
-    description_of_loss,
-    claim_amount,
-    business_status,
-    adjuster_assigned,
-    embedding <=> $3::vector AS similarity_score
+const listClaimsWithVector = `-- name: ListClaimsWithVector :many
+SELECT
+    id, item_type, claim_id, policy_number, system_status, created_at, updated_at,
+    policyholder_id, claim_type, date_of_loss, description_of_loss, claim_amount,
+    business_status, adjuster_assigned,
+    (embedding <=> $1::vector) as similarity_score
 FROM vw_insurance_claims
 WHERE
-    adjuster_assigned = COALESCE($4, adjuster_assigned)
-AND
-    business_status = COALESCE($5, business_status)
-AND
-    policy_number = COALESCE($6, policy_number)
-AND
-    (vector_dims($3::vector) IS NULL OR (embedding <=> $3::vector) < 0.8)
-ORDER BY
-    similarity_score ASC,
-    CASE WHEN $7::text = 'claim_amount' AND $8::text = 'asc' THEN claim_amount END ASC,
-    CASE WHEN $7::text = 'claim_amount' AND $8::text = 'desc' THEN claim_amount END DESC,
-    CASE WHEN $7::text = 'date_of_loss' AND $8::text = 'asc' THEN date_of_loss END ASC,
-    CASE WHEN $7::text = 'date_of_loss' AND $8::text = 'desc' THEN date_of_loss END DESC,
-    date_of_loss DESC
-LIMIT $1
-OFFSET $2
+    ($2::text IS NULL OR claim_id = $2)
+AND ($3::decimal IS NULL OR claim_amount >= $3)
+AND ($4::decimal IS NULL OR claim_amount <= $4)
+AND ($5::text IS NULL OR adjuster_assigned = $5)
+AND ($6::text IS NULL OR business_status = $6)
+AND ($7::text IS NULL OR policy_number = $7)
+AND (embedding <=> $1::vector) < 0.8
+ORDER BY similarity_score ASC
+LIMIT $9 OFFSET $8
 `
 
-type ListClaimsParams struct {
-	Limit            int32           `json:"limit"`
-	Offset           int32           `json:"offset"`
+type ListClaimsWithVectorParams struct {
 	SearchEmbedding  pgvector.Vector `json:"search_embedding"`
+	ClaimID          pgtype.Text     `json:"claim_id"`
+	MinAmount        pgtype.Numeric  `json:"min_amount"`
+	MaxAmount        pgtype.Numeric  `json:"max_amount"`
 	AdjusterAssigned pgtype.Text     `json:"adjuster_assigned"`
 	Status           pgtype.Text     `json:"status"`
 	PolicyNumber     pgtype.Text     `json:"policy_number"`
-	SortBy           string          `json:"sort_by"`
-	SortDirection    string          `json:"sort_direction"`
+	Offset           int32           `json:"offset"`
+	Limit            int32           `json:"limit"`
 }
 
-type ListClaimsRow struct {
+type ListClaimsWithVectorRow struct {
 	ID                int64              `json:"id"`
 	ItemType          ItemType           `json:"item_type"`
 	ClaimID           pgtype.Text        `json:"claim_id"`
@@ -236,26 +185,126 @@ type ListClaimsRow struct {
 	SimilarityScore   interface{}        `json:"similarity_score"`
 }
 
-// backend/sql/apps/insurance/queries/insurance_queries.sql
-// Fetches a paginated and filtered list of insurance claims.
-func (q *Queries) ListClaims(ctx context.Context, arg ListClaimsParams) ([]ListClaimsRow, error) {
-	rows, err := q.db.Query(ctx, listClaims,
-		arg.Limit,
-		arg.Offset,
+// Fetches and sorts claims by semantic similarity.
+func (q *Queries) ListClaimsWithVector(ctx context.Context, arg ListClaimsWithVectorParams) ([]ListClaimsWithVectorRow, error) {
+	rows, err := q.db.Query(ctx, listClaimsWithVector,
 		arg.SearchEmbedding,
+		arg.ClaimID,
+		arg.MinAmount,
+		arg.MaxAmount,
 		arg.AdjusterAssigned,
 		arg.Status,
 		arg.PolicyNumber,
-		arg.SortBy,
-		arg.SortDirection,
+		arg.Offset,
+		arg.Limit,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListClaimsRow
+	var items []ListClaimsWithVectorRow
 	for rows.Next() {
-		var i ListClaimsRow
+		var i ListClaimsWithVectorRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ItemType,
+			&i.ClaimID,
+			&i.PolicyNumber,
+			&i.SystemStatus,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+			&i.PolicyholderID,
+			&i.ClaimType,
+			&i.DateOfLoss,
+			&i.DescriptionOfLoss,
+			&i.ClaimAmount,
+			&i.BusinessStatus,
+			&i.AdjusterAssigned,
+			&i.SimilarityScore,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listClaimsWithoutVector = `-- name: ListClaimsWithoutVector :many
+SELECT
+    id, item_type, claim_id, policy_number, system_status, created_at, updated_at,
+    policyholder_id, claim_type, date_of_loss, description_of_loss, claim_amount,
+    business_status, adjuster_assigned,
+    NULL::float8 as similarity_score
+FROM vw_insurance_claims
+WHERE
+    ($1::text IS NULL OR claim_id = $1)
+AND ($2::decimal IS NULL OR claim_amount >= $2)
+AND ($3::decimal IS NULL OR claim_amount <= $3)
+AND ($4::text IS NULL OR adjuster_assigned = $4)
+AND ($5::text IS NULL OR business_status = $5)
+AND ($6::text IS NULL OR policy_number = $6)
+ORDER BY
+    CASE WHEN $7::text = 'claim_amount' AND $8::text = 'asc' THEN claim_amount END ASC,
+    CASE WHEN $7::text = 'claim_amount' AND $8::text = 'desc' THEN claim_amount END DESC,
+    date_of_loss DESC
+LIMIT $10 OFFSET $9
+`
+
+type ListClaimsWithoutVectorParams struct {
+	ClaimID          pgtype.Text    `json:"claim_id"`
+	MinAmount        pgtype.Numeric `json:"min_amount"`
+	MaxAmount        pgtype.Numeric `json:"max_amount"`
+	AdjusterAssigned pgtype.Text    `json:"adjuster_assigned"`
+	Status           pgtype.Text    `json:"status"`
+	PolicyNumber     pgtype.Text    `json:"policy_number"`
+	SortBy           string         `json:"sort_by"`
+	SortDirection    string         `json:"sort_direction"`
+	Offset           int32          `json:"offset"`
+	Limit            int32          `json:"limit"`
+}
+
+type ListClaimsWithoutVectorRow struct {
+	ID                int64              `json:"id"`
+	ItemType          ItemType           `json:"item_type"`
+	ClaimID           pgtype.Text        `json:"claim_id"`
+	PolicyNumber      pgtype.Text        `json:"policy_number"`
+	SystemStatus      ItemStatus         `json:"system_status"`
+	CreatedAt         pgtype.Timestamptz `json:"created_at"`
+	UpdatedAt         pgtype.Timestamptz `json:"updated_at"`
+	PolicyholderID    string             `json:"policyholder_id"`
+	ClaimType         string             `json:"claim_type"`
+	DateOfLoss        pgtype.Date        `json:"date_of_loss"`
+	DescriptionOfLoss string             `json:"description_of_loss"`
+	ClaimAmount       pgtype.Numeric     `json:"claim_amount"`
+	BusinessStatus    string             `json:"business_status"`
+	AdjusterAssigned  string             `json:"adjuster_assigned"`
+	SimilarityScore   pgtype.Float8      `json:"similarity_score"`
+}
+
+// Fetches a paginated and filtered list of insurance claims without vector search.
+func (q *Queries) ListClaimsWithoutVector(ctx context.Context, arg ListClaimsWithoutVectorParams) ([]ListClaimsWithoutVectorRow, error) {
+	rows, err := q.db.Query(ctx, listClaimsWithoutVector,
+		arg.ClaimID,
+		arg.MinAmount,
+		arg.MaxAmount,
+		arg.AdjusterAssigned,
+		arg.Status,
+		arg.PolicyNumber,
+		arg.SortBy,
+		arg.SortDirection,
+		arg.Offset,
+		arg.Limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListClaimsWithoutVectorRow
+	for rows.Next() {
+		var i ListClaimsWithoutVectorRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.ItemType,
@@ -287,29 +336,29 @@ const listPolicyholders = `-- name: ListPolicyholders :many
 SELECT id, item_type, policyholder_id, state, status, created_at, updated_at, policyholder_name, city, customer_since_date, customer_level, active_policies
 FROM vw_policyholders
 WHERE
-    state = COALESCE($3, state)
+    state = COALESCE($1, state)
 AND
-    customer_level = COALESCE($4, customer_level)
+    customer_level = COALESCE($2, customer_level)
 ORDER BY
     policyholder_name
-LIMIT $1
-OFFSET $2
+LIMIT $4
+OFFSET $3
 `
 
 type ListPolicyholdersParams struct {
-	Limit         int32       `json:"limit"`
-	Offset        int32       `json:"offset"`
 	State         pgtype.Text `json:"state"`
 	CustomerLevel pgtype.Text `json:"customer_level"`
+	Offset        int32       `json:"offset"`
+	Limit         int32       `json:"limit"`
 }
 
 // Fetches a paginated and filtered list of policyholders.
 func (q *Queries) ListPolicyholders(ctx context.Context, arg ListPolicyholdersParams) ([]VwPolicyholder, error) {
 	rows, err := q.db.Query(ctx, listPolicyholders,
-		arg.Limit,
-		arg.Offset,
 		arg.State,
 		arg.CustomerLevel,
+		arg.Offset,
+		arg.Limit,
 	)
 	if err != nil {
 		return nil, err
@@ -346,13 +395,10 @@ const searchComments = `-- name: SearchComments :many
 SELECT
     'Comment' AS source,
     comment::TEXT AS text,
-    embedding <=> $1 AS similarity_score
-FROM
-    comments
-WHERE
-    embedding IS NOT NULL
-ORDER BY
-    similarity_score ASC
+    embedding <=> $1::vector AS similarity_score
+FROM comments
+WHERE embedding IS NOT NULL
+ORDER BY similarity_score ASC
 LIMIT $2
 `
 
@@ -391,14 +437,13 @@ func (q *Queries) SearchComments(ctx context.Context, arg SearchCommentsParams) 
 const searchKnowledgeChunks = `-- name: SearchKnowledgeChunks :many
 SELECT
     'Knowledge Chunk from ' || (custom_properties->'metadata'->>'document_name')::VARCHAR AS source,
-    (custom_properties->>'chunk_text')::TEXT AS TEXT,
-    embedding <=> $1 AS similarity_score
-FROM
-    items
+    COALESCE((custom_properties->>'chunk_text')::TEXT, '') AS text,
+    embedding <=> $1::vector AS similarity_score,
+    custom_properties->'metadata'->'source_custom_properties' AS structured_metadata
+FROM items
 WHERE
-    item_type = 'KNOWLEDGE_CHUNK'
-ORDER BY
-    similarity_score ASC
+    item_type = 'KNOWLEDGE_CHUNK' AND embedding IS NOT NULL
+ORDER BY similarity_score ASC
 LIMIT $2
 `
 
@@ -408,9 +453,10 @@ type SearchKnowledgeChunksParams struct {
 }
 
 type SearchKnowledgeChunksRow struct {
-	Source          interface{} `json:"source"`
-	Text            string      `json:"text"`
-	SimilarityScore interface{} `json:"similarity_score"`
+	Source             interface{} `json:"source"`
+	Text               interface{} `json:"text"`
+	SimilarityScore    interface{} `json:"similarity_score"`
+	StructuredMetadata interface{} `json:"structured_metadata"`
 }
 
 // Searches semantically the knowledge base
@@ -423,7 +469,12 @@ func (q *Queries) SearchKnowledgeChunks(ctx context.Context, arg SearchKnowledge
 	var items []SearchKnowledgeChunksRow
 	for rows.Next() {
 		var i SearchKnowledgeChunksRow
-		if err := rows.Scan(&i.Source, &i.Text, &i.SimilarityScore); err != nil {
+		if err := rows.Scan(
+			&i.Source,
+			&i.Text,
+			&i.SimilarityScore,
+			&i.StructuredMetadata,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
