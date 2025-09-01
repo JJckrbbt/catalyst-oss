@@ -186,7 +186,7 @@ export default function ClaimsPage() {
       <div className="w-[30%] flex-shrink-0">
         <Card className="h-full flex flex-col">
           <CardHeader>
-            <CardTitle>AI Assistant</CardTitle>
+            <CardTitle>Catalyst Command</CardTitle>
           </CardHeader>
           <CardContent className="flex-1 flex flex-col gap-4 min-h-0">
             <div ref={chatContainerRef} className="flex-1 overflow-y-auto pr-4 space-y-4">
