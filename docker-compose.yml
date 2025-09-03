@@ -1,4 +1,3 @@
-version: '3.8'
 
 services:
   postgres:
@@ -17,6 +16,39 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
+
+  backend-service:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: catalyst-backend
+    environment:
+      APP_ENV: development-json
+      DATABASE_URL: postgres://testuser:testpassword@postgres:5432/testdb?sslmode=disable
+      EMBEDDING_SERVICE_URL: http://embedding-service:5001/embed
+      OPENAI_API_KEY: ${OPENAI_API_KEY}
+      GCS_BUCKET_NAME: ${GCS_BUCKET_NAME}
+      AUTH0_DOMAIN: ${AUTH0_DOMAIN}
+      AUTH0_AUDIENCE: ${AUTH0_AUDIENCE}
+      SENTRY_DSN: ${SENTRY_DSN}
+      GOOGLE_APPLICATION_CREDENTIALS: /etc/gcloud/gcs-key.json
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      embedding-service:
+        condition: service_started
+    volumes:
+      - ./gcp_service_account.json:/etc/gcloud/gcs-key.json
+      - ./backend/configs:/app/backend/configs
+  embedding-service:
+    build:
+      context: ./backend/services/embedding-service
+      dockerfile: Dockerfile
+    container_name: catalyst-embedding-service
+    ports:
+      - "5001:5001"
 
 volumes:
   catalyst_postgres_data:

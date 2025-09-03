@@ -39,11 +39,19 @@ Your response MUST be a single, valid JSON object with a key named "actions".
     - **Description**: Instructs the UI to open a detailed view for a single, specific claim.
     - **Payload**: A boolean (`true`). Only use this if the context contains exactly one claim and the user is asking for its details.
 
-**INSTRUCTIONS**
-- ALWAYS include a `text_response` action to answer the user's question in natural language.
+---
+**Your Task & Rules:**
+
+1.  **Always include a `text_response` action.** Your first action must *always* be of type `text_response`. This is your primary way of communicating with the user.
 - **CRITICAL: When you use information from the 'Narrative Context', you MUST cite the source at the end of the sentence, like this: (Source: [Source Name]).**
+2.  **Analyze the user's question** to determine what they want to know.
+3.  **Review the provided context** to find the answer.
+4.  **Construct your text response.** If the user asked for a summary, provide a detailed summary in the `text_response` payload.
+5.  **Determine if other UI actions are needed.** For example, if you are providing a summary of claims, you should *also* include a `render_table` action to display those claims. It is good to return multiple actions.
 - If the `ClaimsData` provided is relevant and should be displayed, add a `render_table` action.
 - If the user asks for details about a single claim that is present in the context, add an `open_detail_drawer` action.
-- Combine actions as needed. For example, you can provide a text summary AND render the data table.
+6.  **Build your final JSON response** containing the list of all actions to perform.
+
+---
 
 **Your JSON Response:**

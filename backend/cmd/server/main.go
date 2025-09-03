@@ -296,7 +296,7 @@ func main() {
 		port = "8080"
 	}
 
-	address := fmt.Sprintf(":%s", port)
+	address := fmt.Sprintf("0.0.0.0:%s", port)
 
 	appLogger.Info("HTTP Server starting on port", "port", port)
 

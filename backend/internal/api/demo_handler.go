@@ -51,7 +51,7 @@ func NewDemoHandler(q *demo.Queries, logger *slog.Logger, apiKey string) (*DemoH
 		queries:             q,
 		logger:              logger.With("component", "demo_handler"),
 		httpClient:          &http.Client{Timeout: 30 * time.Second},
-		embeddingServiceURL: "http://localhost:5001/embed",
+		embeddingServiceURL: "http://embedding-service:5001/embed",
 		plannerTemplate:     plannerTmpl,
 		synthesizerTemplate: synthesizerTmpl,
 		openAIAPIKey:	     apiKey,
