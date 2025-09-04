@@ -10,7 +10,6 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
-	"sort"
 	"strconv"
 	"strings"
 	"text/template"
@@ -43,12 +42,14 @@ type ToolCall struct {
 type InsuranceContext struct {
 	ClaimsData      interface{}
 	KnowledgeChunks []SearchResult
+	Comments	[]SearchResult
 }
 type SynthesizerTemplateData struct {
 	UserQuestion    string
 	History         []ChatMessage
 	ClaimsData      interface{}
 	KnowledgeChunks []SearchResult
+	Comments	[]SearchResult
 }
 type ActionPlan struct {
 	Type    string      `json:"type"`
@@ -606,7 +607,7 @@ func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCa
 			insuranceCtx.ClaimsData = claimsData
 			reqLogger.InfoContext(ctx, "Executed tool: get_claims_data", "results_found", claimsCount)
 
-		case "find_context_in_documents":
+		case "search_knowledge_base":
 			getStringArg := func(key string) string {
 				if val, ok := toolCall.Arguments[key]; ok {
 					if strVal, ok := val.(string); ok {
@@ -617,7 +618,7 @@ func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCa
 			}
 			searchQuery := getStringArg("search_query")
 			if searchQuery == "" {
-				reqLogger.WarnContext(ctx, "Missing 'search_query' argument")
+				reqLogger.WarnContext(ctx, "Missing 'search_query' argument for search_knowledge_base")
 				continue
 			}
 			embedding, err := h.getEmbedding(ctx, searchQuery)
@@ -626,74 +627,48 @@ func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCa
 				continue
 			}
 			pgVec := pgvector.NewVector(embedding)
-			var combinedResults []SearchResult
 
 			knowledgeChunks, err1 := h.queries.SearchKnowledgeChunks(ctx, insurance.SearchKnowledgeChunksParams{
 				Embedding: pgVec,
-				Limit:     10,
+				Limit:     5,
 			})
 			if err1 != nil {
 				reqLogger.ErrorContext(ctx, "Failed to search knowledge chunks", "error", err1)
-			} else {
-				for _, chunk := range knowledgeChunks {
-					sourceText, _ := chunk.Source.(string)
-					textValue, _ := chunk.Text.(string)
-					score, _ := chunk.SimilarityScore.(float64)
-					var metadata map[string]interface{}
-					if rawJSON, ok := chunk.StructuredMetadata.([]byte); ok && rawJSON != nil {
-						_ = json.Unmarshal(rawJSON, &metadata)
-					}
-					combinedResults = append(combinedResults, SearchResult{Source: sourceText, Text: textValue, SimilarityScore: float32(score), Metadata: metadata})
+				continue // Use continue to skip to the next tool call on error
+			}
+
+			var enrichedResults []SearchResult
+			for _, chunk := range knowledgeChunks {
+				sourceText, _ := chunk.Source.(string)
+				textValue, _ := chunk.Text.(string)
+				score, _ := chunk.SimilarityScore.(float64)
+				var metadata map[string]interface{}
+				if rawJSON, ok := chunk.StructuredMetadata.([]byte); ok && rawJSON != nil {
+					_ = json.Unmarshal(rawJSON, &metadata)
 				}
-			}
 
-			comments, err2 := h.queries.SearchComments(ctx, insurance.SearchCommentsParams{
-				Embedding: pgVec,
-				Limit:     10,
-			})
-			if err2 != nil {
-				reqLogger.ErrorContext(ctx, "Failed to search comments", "error", err2)
-			} else {
-				for _, comment := range comments {
-					score, _ := comment.SimilarityScore.(float64)
-					
-					commentMetadata := make(map[string]interface{})
-					if comment.ClaimID.Valid {
-						commentMetadata["claim_id"] = comment.ClaimID.String
-					}
-
-					combinedResults = append(combinedResults, SearchResult{
-						Source:		comment.Source, 
-						Text:		comment.Text, 
-						SimilarityScore: float32(score),
-						Metadata:	commentMetadata,
-					})
+				enrichedResult := SearchResult{
+					Source:          sourceText,
+					Text:            textValue,
+					SimilarityScore: float32(score),
+					Metadata:        metadata,
 				}
-			}
 
-			sort.Slice(combinedResults, func(i, j int) bool {
-				return combinedResults[i].SimilarityScore < combinedResults[j].SimilarityScore
-			})
-			topResults := combinedResults
-			if len(topResults) > 5 {
-				topResults = topResults[:5]
-			}
-
-			enrichedResults := []SearchResult{}
-			for _, result := range topResults {
-				enrichedResult := result
+				// Fetch and merge header data if a document_id is present
 				if enrichedResult.Metadata != nil {
 					if docID, ok := enrichedResult.Metadata["document_id"].(string); ok && docID != "" {
 						headerMetadataJSON, err := h.queries.GetDocumentHeader(ctx, docID)
 						if err != nil {
-							reqLogger.WarnContext(ctx, "Could not fetch header", "doc_id", docID)
+							reqLogger.WarnContext(ctx, "Could not fetch document header", "doc_id", docID, "error", err)
 						} else if headerMetadataJSON != nil {
 							if rawJSON, ok := headerMetadataJSON.([]byte); ok {
 								var headerMetadata map[string]interface{}
 								if err := json.Unmarshal(rawJSON, &headerMetadata); err == nil {
+									// Ensure metadata map is initialized
 									if enrichedResult.Metadata == nil {
 										enrichedResult.Metadata = make(map[string]interface{})
 									}
+									// Merge header properties into the chunk's metadata
 									for key, value := range headerMetadata {
 										enrichedResult.Metadata[key] = value
 									}
@@ -704,12 +679,60 @@ func (h *InsuranceHandler) getContextFromPlan(ctx context.Context, plan []ToolCa
 				}
 				enrichedResults = append(enrichedResults, enrichedResult)
 			}
-			insuranceCtx.KnowledgeChunks = enrichedResults
-			reqLogger.InfoContext(ctx, "Executed tool: find_context_in_documents", "results_found", len(enrichedResults))
+			insuranceCtx.KnowledgeChunks = append(insuranceCtx.KnowledgeChunks, enrichedResults...)
+
+
+		case "search_comments":
+			getStringArg := func(key string) string {
+				if val, ok := toolCall.Arguments[key]; ok {
+					if strVal, ok := val.(string); ok {
+						return strVal
+					}
+				}
+				return ""
+			}
+			searchQuery := getStringArg("search_query")
+			if searchQuery == "" {
+				reqLogger.WarnContext(ctx, "Missing 'search_query' argument for search_comments")
+				continue
+			}
+			embedding, err := h.getEmbedding(ctx, searchQuery)
+			if err != nil {
+				reqLogger.ErrorContext(ctx, "Failed to get embedding", "error", err)
+				continue
+			}
+			pgVec := pgvector.NewVector(embedding)
+
+			comments, err2 := h.queries.SearchComments(ctx, insurance.SearchCommentsParams{
+				Embedding: pgVec,
+				Limit:     10,
+			})
+			if err2 != nil {
+				reqLogger.ErrorContext(ctx, "Failed to search comments", "error", err2)
+			} else {
+				var commentResults []SearchResult
+				for _, comment := range comments {
+					score, _ := comment.SimilarityScore.(float64)
+					
+					commentMetadata := make(map[string]interface{})
+					if comment.ClaimID.Valid {
+						commentMetadata["claim_id"] = comment.ClaimID.String
+					}
+
+					commentResults = append(commentResults, SearchResult{
+						Source:		comment.Source, 
+						Text:		comment.Text, 
+						SimilarityScore: float32(score),
+						Metadata:	commentMetadata,
+					})
+				}
+				insuranceCtx.Comments = commentResults
+			}
 		}
 	}
 	return &insuranceCtx, nil
 }
+	
 func (h *InsuranceHandler) synthesizeAnswer(ctx context.Context, c echo.Context, question string, history []ChatMessage, context *InsuranceContext) (QueryApiResponse, error) {
 	h.logger.InfoContext(ctx, "Synthesizing final answer from hybrid context...")
 	templateData := SynthesizerTemplateData{
@@ -717,6 +740,7 @@ func (h *InsuranceHandler) synthesizeAnswer(ctx context.Context, c echo.Context,
 		History:         history,
 		ClaimsData:      context.ClaimsData,
 		KnowledgeChunks: context.KnowledgeChunks,
+		Comments:	 context.Comments,
 	}
 	var promptBuffer bytes.Buffer
 	if err := h.synthesizerTemplate.Execute(&promptBuffer, templateData); err != nil {

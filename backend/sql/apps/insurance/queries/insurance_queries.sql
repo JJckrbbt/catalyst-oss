@@ -61,10 +61,10 @@ SELECT
     'Comment' AS source,
     comment::TEXT AS text,
     i.business_key AS claim_id,
-    embedding <=> @embedding::vector AS similarity_score
-FROM comments
+    c.embedding <=> @embedding::vector AS similarity_score
+FROM comments c
 JOIN items i ON c.item_id = i.id
-WHERE embedding IS NOT NULL
+WHERE c.embedding IS NOT NULL
 ORDER BY similarity_score ASC
 LIMIT sqlc.arg('limit');
 
