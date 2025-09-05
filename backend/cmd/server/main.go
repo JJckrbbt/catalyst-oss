@@ -51,6 +51,43 @@ func slogPanicRecoverMiddleware(logger *slog.Logger) echo.MiddlewareFunc {
 	}
 }
 
+func slogRequestLogger(logger *slog.Logger) echo.MiddlewareFunc {
+	return func(next echo.HandlerFunc) echo.HandlerFunc {
+		return func(c echo.Context) error {
+			reqID := uuid.New().String()
+			c.set("requestID", reqID)
+
+			reqLogger := logger.With(
+				"request_id", req.ID,
+				"method", c.Request().Method,
+				"path", c.Request().URL.Path,
+				"user_agent", c.Request().UserAgent(),
+				"ip", c.RealID()
+			)
+
+			ctx := context.WithBalue(c.Request().Context(), "logger", reqLogger)
+			c.SetRequest(c.Request().WithContext(ctx))
+
+			start := time.Now()
+			err := next(c)
+			latency := time.Since(start)
+
+			status := c.Response().Status
+			if err != nil {
+				if he, ok := err.(*echo.HTTPError); ok {
+					status = he.Code
+				}
+			}
+
+			reqLogger.InfoContext(ctx, "HTTP Request", 
+				"status", status,
+				"latency_ms", latency.Milliseconds(),
+			)
+			return err
+		}
+	}
+}
+
 func main() {
 	// 1. Load application configuration FIRST.
 	cfg, err := config.LoadConfig()

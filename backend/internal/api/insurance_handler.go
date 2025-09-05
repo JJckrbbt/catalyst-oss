@@ -126,11 +126,11 @@ func NewInsuranceHandler(q *insurance.Queries, pq repository.Querier, apiKey str
 			return string(a), nil
 		},
 	}
-	plannerTmpl, err := template.New("insurance_planner_prompt.tmpl").Funcs(funcMap).ParseFiles("backend/configs/prompts/apps/insurance/insurance_planner_prompt.tmpl")
+	plannerTmpl, err := template.New("insurance_planner_prompt.tmpl").Funcs(funcMap).ParseFiles("backend/configs/apps/insurance/prompts/insurance_planner_prompt.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse insurance planner template: %w", err)
 	}
-	synthesizerTmpl, err := template.New("synthesizer_prompt.tmpl").Funcs(funcMap).ParseFiles("backend/configs/prompts/apps/insurance/synthesizer_prompt.tmpl")
+	synthesizerTmpl, err := template.New("synthesizer_prompt.tmpl").Funcs(funcMap).ParseFiles("backend/configs/apps/insurance/prompts/synthesizer_prompt.tmpl")
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse insurance synthesizer template: %w", err)
 	}
